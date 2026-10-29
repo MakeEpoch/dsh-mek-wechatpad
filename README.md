@@ -210,3 +210,7 @@ dsh plugin --profile web remove dsh-mek-wechatpad --ignore-scripts
 ## 许可
 
 MIT。
+
+## DSH 宿主依赖
+
+DSH、Cordis、Schemastery 等宿主 API 由 DSH 运行时提供，声明为 peer 依赖。开发时通过 `npm ci` 安装独立的开发依赖；生产插件不携带宿主核心库副本，否则会破坏智能体作用域，导致工具重复注册。
