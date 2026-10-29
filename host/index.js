@@ -1,5 +1,5 @@
 /**
- * dsh host entry: `@dsh/wechatpad`.
+ * dsh host entry: `dsh-mek-wechatpad`.
  *
  * Cordis semantics this plugin relies on:
  *  - `Config` is read by the Settings service, so every user-editable field is

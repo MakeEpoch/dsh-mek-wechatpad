@@ -141,7 +141,7 @@ dom.window.__ModuleLoader__ = {
 
 new Function('window', 'document', bundle)(dom.window, dom.window.document);
 
-assert.equal(loaderCall.id, '@dsh/wechatpad');
+assert.equal(loaderCall.id, 'dsh-mek-wechatpad');
 assert.ok(dom.window.pluginExports.apply, 'the bundle must export apply');
 assert.deepEqual(dom.window.pluginExports.inject, ['slots', 'connection', 'locale']);
 

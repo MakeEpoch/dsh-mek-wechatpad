@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 
 const require = createRequire(import.meta.url);
 const packageRoot = fileURLToPath(new URL('../', import.meta.url));
-const loaderId = process.env.DSH_WECHATPAD_CLIENT_ID ?? '@dsh/wechatpad';
+const loaderId = process.env.DSH_WECHATPAD_CLIENT_ID ?? 'dsh-mek-wechatpad';
 
 let esbuild;
 try {

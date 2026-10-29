@@ -27,7 +27,7 @@ function fakeCtx(overrides = {}) {
     fiber: { uid: 11 },
     get: (name) => {
       if (name === 'settings') return settings;
-      if (name === 'configEditor') return { entries: () => [{ id: 'wechatpad', options: { name: '@dsh/wechatpad', config: {} }, fiber: { uid: 11 } }] };
+      if (name === 'configEditor') return { entries: () => [{ id: 'wechatpad', options: { name: 'dsh-mek-wechatpad', config: {} }, fiber: { uid: 11 } }] };
       return undefined;
     },
     ...overrides,

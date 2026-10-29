@@ -202,7 +202,7 @@ Host 与 dsh 之间不另开 HTTP 端口、不另发 token：调用直接走 `ct
 ## 卸载
 
 ```sh
-dsh plugin --profile web remove @dsh/wechatpad --ignore-scripts
+dsh plugin --profile web remove dsh-mek-wechatpad --ignore-scripts
 ```
 
 然后重启 `dsh web`。原始 profile 文件备份在 `~/.dsh/profiles/web/.plugin-manager/wechatpad-backup-*`。

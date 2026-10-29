@@ -232,7 +232,7 @@ dom.window.__ModuleLoader__ = {
 };
 
 new Function('window', 'document', bundle)(dom.window, dom.window.document);
-assert.equal(loaderCall.id, '@dsh/wechatpad');
+assert.equal(loaderCall.id, 'dsh-mek-wechatpad');
 const dispose = dom.window.pluginExports.apply(makeContext('zh'));
 assert.equal(registrations.length, 1, 'exactly one settings section registers');
 

@@ -24,7 +24,7 @@ try {
   await writeFile(join(target, 'package.json'), '{"name":"wechatpad-package-check","private":true}');
   npm(['install', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund', join(directory, packed.filename)], target);
   const require = createRequire(join(target, 'package.json'));
-  const root = await realpath(join(target, 'node_modules/@dsh/wechatpad'));
+  const root = await realpath(join(target, 'node_modules/dsh-mek-wechatpad'));
   assert.ok(root.startsWith(target + '/'));
   const installed = createRequire(join(root, 'package.json'));
   for (const name of ['ws', 'qrcode', 'silk-wasm']) {

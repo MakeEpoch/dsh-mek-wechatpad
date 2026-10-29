@@ -4,7 +4,7 @@
 
 ## 概念映射
 
-| hermes (`hermes-plugin-wechatpad`) | 本项目 (`@dsh/wechatpad`) |
+| hermes (`hermes-plugin-wechatpad`) | 本项目 (`dsh-mek-wechatpad`) |
 | --- | --- |
 | `plugin.yaml` 声明 `kind: platform` 与一堆环境变量 | dsh 无平台扩展点；本插件是普通 Cordis 插件，Config schema 即设置表单 |
 | `gateway`（Hermes 自己的网关进程） | dsh 自身进程；通过 `ctx.typertGateway` 驱动会话 |

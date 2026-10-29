@@ -1,5 +1,5 @@
 /**
- * Browser half of `@dsh/wechatpad`: the "设置 → 微信" page.
+ * Browser half of `dsh-mek-wechatpad`: the "设置 → 微信" page.
  *
  * dsh's Settings shell owns the panel chrome; this module contributes one
  * section through the official `settings.section` slot. The component is a

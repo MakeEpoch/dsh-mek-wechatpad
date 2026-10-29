@@ -1,5 +1,5 @@
 {
-  "name": "@dsh/wechatpad",
+  "name": "dsh-mek-wechatpad",
   "version": "0.1.2",
   "description": "WechatPad · 把微信（WechatPad / WeChat Bridge）接入 DeepSeek dsh：设置面板配置，微信消息驱动真实 dsh 会话",
   "type": "module",

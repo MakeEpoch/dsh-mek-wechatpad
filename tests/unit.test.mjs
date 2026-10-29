@@ -306,10 +306,10 @@ test('settings: entry lookup prefers own fiber, then the package name, then the 
   // The Loader hands out a runtime fiber object whose uid identifies the entry.
   const fiber = { id: 'fiber-1', uid: 7 };
   // Settings keys on `options.id`, never on `entry.id` (the include path).
-  const own = { fiber, get: () => ({ entries: () => [{ id: 'include:my-entry', options: { id: 'my-entry', name: '@dsh/wechatpad' }, fiber: { uid: 7, state: 2 } }] }) };
+  const own = { fiber, get: () => ({ entries: () => [{ id: 'include:my-entry', options: { id: 'my-entry', name: 'dsh-mek-wechatpad' }, fiber: { uid: 7, state: 2 } }] }) };
   assert.equal(resolveSettingsEntry(own).ns, 'my-entry', 'the include path must not become the namespace');
 
-  const byName = { fiber: { id: 'fiber-1' }, get: () => ({ entries: () => [{ id: 'include:packed-entry', options: { id: 'packed-entry', name: '@dsh/wechatpad' } }] }) };
+  const byName = { fiber: { id: 'fiber-1' }, get: () => ({ entries: () => [{ id: 'include:packed-entry', options: { id: 'packed-entry', name: 'dsh-mek-wechatpad' } }] }) };
   assert.equal(resolveSettingsEntry(byName).ns, 'packed-entry');
 });
 
@@ -394,7 +394,7 @@ test('settings: bridge subscription settings are editable from the panel', async
     fiber: { uid: 5 },
     get: (name) => (name === 'settings'
       ? { describe: () => [{ ns: 'wechatpad', revision: 2 }], update: async (ns, patch) => writes.push({ ns, patch }) }
-      : { entries: () => [{ id: 'include:wechatpad', options: { id: 'wechatpad', name: '@dsh/wechatpad' }, fiber: { uid: 5 } }] }),
+      : { entries: () => [{ id: 'include:wechatpad', options: { id: 'wechatpad', name: 'dsh-mek-wechatpad' }, fiber: { uid: 5 } }] }),
   };
   await savePanelSettings({
     ctx,
@@ -572,7 +572,7 @@ test('settings: provider is validated and reaches the write', async () => {
     fiber: { uid: 9 },
     get: (name) => (name === 'settings'
       ? { describe: () => [{ ns: 'wechatpad', revision: 1 }], update: async (ns, patch) => writes.push({ ns, patch }) }
-      : { entries: () => [{ id: 'include:wechatpad', options: { id: 'wechatpad', name: '@dsh/wechatpad' }, fiber: { uid: 9 } }] }),
+      : { entries: () => [{ id: 'include:wechatpad', options: { id: 'wechatpad', name: 'dsh-mek-wechatpad' }, fiber: { uid: 9 } }] }),
   });
   await savePanelSettings({ ctx: makeCtx(), patch: { provider: 'weixin', weixinTyping: false }, expectedRevision: 1 });
   assert.deepEqual(writes.at(-1).patch, { provider: 'weixin', weixinTyping: false });

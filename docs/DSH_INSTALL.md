@@ -59,7 +59,7 @@ Host、Client 和 `ws`、`qrcode`、`silk-wasm` 运行依赖安装在 DSH profil
 ## 5. 卸载
 
 ```sh
-dsh plugin --profile web remove @dsh/wechatpad --ignore-scripts
+dsh plugin --profile web remove dsh-mek-wechatpad --ignore-scripts
 ```
 
 然后重启 `dsh web`。原始 profile 文件在 `~/.dsh/profiles/web/.plugin-manager/wechatpad-backup-*`；正常卸载请用 dsh 管理器，不要整目录覆盖旧备份，以免冲掉安装之后其他插件的改动。
@@ -68,7 +68,7 @@ dsh plugin --profile web remove @dsh/wechatpad --ignore-scripts
 
 | 现象 | 检查 |
 | --- | --- |
-| 设置里没有「微信」 | `dsh.profile.bundles` 是否含 `@dsh/wechatpad`；是否重启并刷新 |
+| 设置里没有「微信」 | `dsh.profile.bundles` 是否含 `dsh-mek-wechatpad`；是否重启并刷新 |
 | 状态「未配置」 | Key 没保存成功，或保存后 Loader 报错（看 dsh 启动日志） |
 | 状态「出错」 | 先点测试连接；确认 Pad 可从 dsh 进程访问（同一台机器/同一网段） |
 | 发消息没反应 | 私聊是否在白名单；群聊策略默认忽略；群里是否 @ 了机器人 |

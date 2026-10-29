@@ -58,6 +58,7 @@ if (!alreadyInstalled) {
   run(dshBin, ['plugin', '--profile', profileName, 'add', '-w', spec, '--ignore-scripts', ...(process.argv.includes('--offline') ? ['--offline'] : [])], { stdio: 'inherit' });
 }
 const installed = JSON.parse(await readFile(manifestPath, 'utf8'));
+if (!installed.dsh.profile.bundles.includes(plugin.name)) { installed.dsh.profile.bundles.push(plugin.name); await writeFile(manifestPath, JSON.stringify(installed, null, 2) + '\n'); }
 const resolved = await realpath(join(profile, 'node_modules', ...plugin.name.split('/')));
 function insideProfile(path) {
   const rel = relative(profile, path);
