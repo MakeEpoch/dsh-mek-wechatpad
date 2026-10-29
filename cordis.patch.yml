@@ -1,0 +1,3 @@
+- insert:
+    - id: wechatpad
+      name: '@dsh/wechatpad'

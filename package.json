@@ -1,0 +1,73 @@
+{
+  "name": "@dsh/wechatpad",
+  "version": "0.1.1",
+  "description": "WechatPad · 把微信（WechatPad / WeChat Bridge）接入 DeepSeek dsh：设置面板配置，微信消息驱动真实 dsh 会话",
+  "type": "module",
+  "main": "./host/index.js",
+  "exports": {
+    ".": "./host/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json",
+    "./host/*": "./host/*"
+  },
+  "files": [
+    "host",
+    "lib",
+    "scripts",
+    "docs",
+    "tests",
+    "cordis.patch.yml",
+    "README.md",
+    "README.en.md",
+    "LICENSE"
+  ],
+  "dsh": {
+    "engines": {
+      "dsh": ">=0.2.1-rc.2 <0.3.0"
+    },
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-connection",
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-primitives"
+      ]
+    }
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node --test tests/*.test.mjs",
+    "install:dsh:web": "node scripts/install-web.mjs",
+    "pack:check": "npm pack --dry-run",
+    "test:package": "node scripts/verify-package.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.12"
+  },
+  "license": "MIT",
+  "peerDependencies": {
+    "@deepseek-ai/cordis": ">=4",
+    "@deepseek-ai/schemastery": ">=3"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/schemastery": {
+      "optional": true
+    },
+    "@deepseek-ai/cordis": {
+      "optional": true
+    }
+  },
+  "dependencies": {
+    "qrcode": "^1.5.4",
+    "silk-wasm": "^3.7.1",
+    "ws": "^8.18.3"
+  }
+}
