@@ -1,6 +1,6 @@
 {
   "name": "@dsh/wechatpad",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "WechatPad · 把微信（WechatPad / WeChat Bridge）接入 DeepSeek dsh：设置面板配置，微信消息驱动真实 dsh 会话",
   "type": "module",
   "main": "./host/index.js",
@@ -50,7 +50,13 @@
     "node": ">=20"
   },
   "devDependencies": {
-    "esbuild": "0.25.12"
+    "@deepseek-ai/cordis": "4.0.6-alpha.1",
+    "@deepseek-ai/dsh-settings": "0.2.2-alpha.2",
+    "@deepseek-ai/schemastery": "3.18.6-alpha.1",
+    "esbuild": "0.25.12",
+    "jsdom": "29.1.1",
+    "react": "19.1.1",
+    "react-dom": "19.1.1"
   },
   "license": "MIT",
   "peerDependencies": {
@@ -66,6 +72,7 @@
     }
   },
   "dependencies": {
+    "@deepseek-ai/dsh-home-paths": "0.2.2-alpha.2",
     "qrcode": "^1.5.4",
     "silk-wasm": "^3.7.1",
     "ws": "^8.18.3"
