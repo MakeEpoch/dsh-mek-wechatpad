@@ -1,6 +1,6 @@
 {
   "name": "dsh-mek-wechatpad",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "WechatPad · 把微信（WechatPad / WeChat Bridge）接入 DeepSeek dsh：设置面板配置，微信消息驱动真实 dsh 会话",
   "type": "module",
   "main": "./host/index.js",

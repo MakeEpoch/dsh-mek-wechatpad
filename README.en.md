@@ -45,6 +45,10 @@ Both live on the dsh web server: the plugin adds no listener, no port and no sec
 
 `/new`, `/stop`, `/status`, `/help` (prefix configurable).
 
+## Sidebar groups
+
+WeChat peer groups split only matching sessions from the host's ungrouped bucket. Native workspaces retain their complete session index when peer records load, update or remount. Search, archive filtering, native navigation and per-chat group settings stay available.
+
 ## How it talks to dsh
 
 The Host calls `ctx.typertGateway.invoke/stream` with a Peer created by `ctx.connection.createPeer({ principal: { kind: 'owner' } })`. No extra HTTP hop or token is involved: the same process answers, and a WeChat message carries the same authority as one typed in the UI.

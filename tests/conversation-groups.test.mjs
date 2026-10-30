@@ -2,12 +2,10 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import vm from 'node:vm';
-const reactPath = process.env.DSH_TEST_REACT,
-  jsdomPath = process.env.DSH_TEST_JSDOM;
-if (!reactPath || !jsdomPath) {
-  console.log('skipped: React/jsdom required for sidebar rendering');
-  process.exit(0);
-}
+import { dirname } from 'node:path';
+const localRequire = createRequire(import.meta.url);
+const reactPath = process.env.DSH_TEST_REACT ?? dirname(localRequire.resolve('react/package.json')),
+  jsdomPath = process.env.DSH_TEST_JSDOM ?? dirname(localRequire.resolve('jsdom/package.json'));
 const require = createRequire(`${reactPath}/`);
 const React = require(reactPath);
 const { act } = React;
@@ -93,15 +91,21 @@ const byId = {
   a: { id: 'a', title: '二维码内容分析' },
   b: { id: 'b', title: '文件内容核对' },
   c: { id: 'c', title: '普通开发会话' },
+  d: { id: 'd', title: '项目需求讨论' },
+  e: { id: 'e', title: '子项目实现讨论' },
 };
 function Rows({ children, className }) {
   return h('div', { className, role: 'tree' }, children);
 }
 let hideQr = false;
+let releaseRecords;
+let holdRecords = true;
 // Mirrors the dsh 0.3 SessionTree shape: one ungrouped ProjectRowItem whose
 // label comes from t("group.ungrouped"), then session rows below it.
 function NativeTree({
   list,
+  workspaces = [],
+  ungroupedSessionIds = list.ids,
   groupExpansion,
   setGroupExpanded,
   open,
@@ -109,10 +113,12 @@ function NativeTree({
 }) {
   const [ticks] = React.useState(0);
   void ticks;
+  const members = ungroupedSessionIds.filter((id) => list.byId[id]);
+  const workspaceRows = workspaces.map((workspace) => h('section', { key: workspace.workspaceId, 'data-workspace': workspace.workspaceId }, workspace.title, workspace.sessionIds.filter((id) => list.byId[id]).map((id) => h('button', { key: id, 'data-session': id, onClick: () => open(id) }, list.byId[id].title))));
   const group = {
     key: '',
     expanded: groupExpansion[''],
-    sessionCount: list.ids.length,
+    sessionCount: members.length,
   };
   return h(
     'div',
@@ -126,6 +132,7 @@ function NativeTree({
             : ['', ...list.ids],
         className: 'native-rows',
       },
+      ...workspaceRows,
       h(
         'button',
         {
@@ -139,7 +146,7 @@ function NativeTree({
         h('span', { className: 'native-label' }, t('group.ungrouped')),
       ),
       group.expanded
-        ? list.ids.map((id) =>
+        ? members.map((id) =>
             h(
               'button',
               { key: id, 'data-session': id, onClick: () => open(id) },
@@ -157,8 +164,11 @@ function Browser({ renderSlot }) {
     h('div', null, '原生搜索和视图选项'),
     renderSlot?.('native.action', {}, {}),
     h(NativeTree, {
-      list: { ids: ['a', 'b', 'c'], byId },
-      workspaces: [],
+      list: { ids: ['a', 'b', 'c', 'd', 'e'], byId },
+      workspaces: [
+        { workspaceId: 'project', title: '示例项目', path: '/example/project', sessionIds: ['d'] },
+        { workspaceId: 'nested', title: '子项目', path: '/example/project/sub', sessionIds: ['e'] },
+      ],
       ungroupedSessionIds: ['a', 'b', 'c'],
       groupExpansion: { '': true },
       setGroupExpanded: () => {},
@@ -258,6 +268,7 @@ const ctx = {
           for (const row of rows)
             if (row.groupKey === payload.groupKey) row.label = payload.name;
         }
+        if (method === 'conversations.list' && holdRecords) await new Promise((resolve) => { releaseRecords = resolve; });
         return { ok: true, value: { items: rows.map((row) => ({ ...row })) } };
       },
     },
@@ -277,6 +288,15 @@ await act(async () => {
   );
   await new Promise((resolve) => setTimeout(resolve, 20));
 });
+const assertWorkspaceSessions = () => {
+  assert.equal(document.querySelectorAll('[data-workspace="project"] [data-session="d"]').length, 1, 'native workspace session must stay visible');
+  assert.equal(document.querySelectorAll('[data-workspace="nested"] [data-session="e"]').length, 1, 'nested workspace session must stay visible');
+  assert.equal(document.querySelectorAll('[data-session="c"]').length, 1, 'ordinary ungrouped session must stay visible');
+};
+assertWorkspaceSessions();
+assert.equal(typeof releaseRecords, 'function');
+await act(async () => { holdRecords = false; releaseRecords(); await new Promise((resolve) => setTimeout(resolve, 20)); });
+assertWorkspaceSessions(); // The old adapter dropped workspace sessions only after peer records arrived.
 assert.match(document.body.textContent, /微信 · user_example/);
 assert.match(document.body.textContent, /微信机器人 · 扫码用户/);
 assert.match(document.body.textContent, /普通开发会话/);
@@ -355,6 +375,7 @@ assert.match(
   /我的微信/,
 );
 assert.equal(rows[1].label, '微信机器人 · 扫码用户');
+assertWorkspaceSessions();
 await act(async () =>
   document
     .querySelector('.wxp-peer-heading')
@@ -412,6 +433,9 @@ assert.equal(
   'fully filtered peer leaves no empty group',
 );
 assert.doesNotMatch(document.body.textContent, /暂无会话/);
+assertWorkspaceSessions();
+await act(async () => { root.render(h(wrapped, { key: 'remount' })); await new Promise((resolve) => setTimeout(resolve, 20)); });
+assertWorkspaceSessions();
 await act(async () => root.unmount());
 for (const cleanup of cleanups.reverse()) cleanup();
 disposed = true;

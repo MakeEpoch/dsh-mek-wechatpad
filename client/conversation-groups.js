@@ -280,6 +280,8 @@ export function PeerGroupedTrees({ NativeTree, treeProps, records, onRename, onS
     [treeProps.list, records, treeProps.ungroupedSessionIds],
   );
   if (!groups.length) return h(NativeTree, treeProps);
+  const peerIds = new Set(groups.flatMap((peer) => peer.ids));
+  const nativeIds = treeProps.list.ids.filter((id) => !peerIds.has(id));
   return h(
     'div',
     { className: 'wxp-conversation-scroll' },
@@ -307,9 +309,9 @@ export function PeerGroupedTrees({ NativeTree, treeProps, records, onRename, onS
           NativeTree,
           treeProps: {
             ...treeProps,
-            list: subsetSessions(treeProps.list, ordinary),
-            // Workspace members were never in the ungrouped bucket, so no
-            // workspace needs filtering — native grouping renders untouched.
+            // Native workspace rows resolve their members through list.byId.
+            // Exclude only the peer sections, not every workspace member.
+            list: subsetSessions(treeProps.list, nativeIds),
             workspaces: treeProps.workspaces,
             ungroupedSessionIds: ordinary,
           },
