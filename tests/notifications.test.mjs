@@ -48,8 +48,15 @@ test('approval notification preserves native result, request and signal without 
   const signal = new AbortController().signal;
   const request = { agent: { session: f.session }, toolName: 'exec', reason: '需要访问目录', signal };
   let calls = 0;
-  const outcome = await f.ctx.waterfall('approval/request', request, async (actual) => {
-    calls++; assert.equal(actual, request); return 'rejected';
+  // The terminal callback receives no arguments in Cordis alpha.2. Observe
+  // the request in a downstream listener, where both Cordis versions pass it.
+  const stop = f.ctx.on('approval/request', (actual, next) => {
+    assert.equal(actual, request); assert.equal(actual.signal, signal);
+    return next();
+  }, { global: true });
+  t.after(stop);
+  const outcome = await f.ctx.waterfall('approval/request', request, async () => {
+    calls++; return 'rejected';
   });
   assert.equal(outcome, 'rejected'); assert.equal(calls, 1); assert.equal(request.signal, signal);
 });

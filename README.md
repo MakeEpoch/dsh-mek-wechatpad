@@ -1,5 +1,10 @@
 # WechatPad · 微信接入 dsh
 
+## 0.1.5 兼容性修复
+
+与 Bot 插件统一，宿主 peer 依赖使用 `*`，由 DSH 提供运行时，开发依赖仍固定版本。将兼容范围放到 DSH 实际识别的顶层 `engines.dsh: >=0.2.1-rc.2 <0.3.0-0`，支持之前版本及当前 `0.2.2-alpha.3`，排除 0.3 系列。原 `dsh.engines` 字段不参与 DSH 兼容性检查。
+
+
 把微信接到 DeepSeek Harness：微信消息进入**真实 dsh 会话**（工具、审批、历史、子代理都与在网页里敲字完全一致），回复回到同一个聊天。配置全部在 dsh 设置面板里完成。
 
 参考实现是 hermes-agent 的 `hermes-plugin-wechatpad`（Python 平台适配器），本项目按 dsh 0.2.1-rc.2 的正式插件协议重写：Host 负责连接与调度，Client 通过官方 `settings.section` 槽位提供设置页。

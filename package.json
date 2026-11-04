@@ -1,6 +1,6 @@
 {
   "name": "dsh-mek-wechatpad",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "WechatPad · 把微信（WechatPad / WeChat Bridge）接入 DeepSeek dsh：设置面板配置，微信消息驱动真实 dsh 会话",
   "type": "module",
   "main": "./host/index.js",
@@ -22,9 +22,6 @@
     "LICENSE"
   ],
   "dsh": {
-    "engines": {
-      "dsh": ">=0.2.1-rc.2 <0.3.0"
-    },
     "bundle": {
       "patch": "./cordis.patch.yml"
     },
@@ -47,7 +44,8 @@
     "test:package": "node scripts/verify-package.mjs"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=20",
+    "dsh": ">=0.2.1-rc.2 <0.3.0-0"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.0.6-alpha.1",
@@ -61,9 +59,9 @@
   },
   "license": "MIT",
   "peerDependencies": {
-    "@deepseek-ai/cordis": ">=4",
-    "@deepseek-ai/schemastery": ">=3",
-    "@deepseek-ai/dsh-home-paths": "0.2.2-alpha.2"
+    "@deepseek-ai/cordis": "*",
+    "@deepseek-ai/schemastery": "*",
+    "@deepseek-ai/dsh-home-paths": "*"
   },
   "peerDependenciesMeta": {
     "@deepseek-ai/schemastery": {
