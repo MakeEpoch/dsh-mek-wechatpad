@@ -35,6 +35,8 @@ import {
 import { DedupeWindow } from './transport.js';
 import { stageMedia } from './media.js';
 import { conversationCatalogFor } from './conversations.js';
+import { createBotLinkSettings } from './bot-link-settings.js';
+import { ChatDirectory } from './chat-directory.js';
 import { outboundArtifactRegistry, materializeOutboundArtifact, releaseOutboundArtifact, prepareReplyMedia } from './vendor/artifact.js';
 
 const STATUS_LINE_INTERVAL_MS = 3_000;
@@ -92,8 +94,9 @@ class SingleConnectionService {
    *   deployment can never point the service at a different adapter by accident;
    *   this seam exists so tests (and a future multi-account host) can supply one.
    */
-  constructor({ ctx, config, logger, createConnection: create, botLinks }) {
+  constructor({ ctx, config, logger, createConnection: create, botLinks, onChat }) {
     this.#botLinks = botLinks;
+    this.onChat = onChat;
     this.#ctx = ctx;
     this.#logger = logger ?? (() => {});
     this.#rawConfig = config;
@@ -330,6 +333,9 @@ class SingleConnectionService {
     const weixin = this.#configuredProvider() === 'weixin';
     const accessConfig = weixin ? { ...this.#config, dmPolicy: 'open', selfWxid: '' } : this.#config;
     const policy = applyPolicy(answering ? { ...message, mentioned: true } : message, accessConfig, accessConfig.selfWxid);
+    if (!['self-echo', 'empty', 'system', 'undecodable'].includes(policy.reason)) {
+      void this.onChat?.(this.#configuredProvider(), message).catch(error => this.#logger('warn', `记录微信聊天失败：${error.message}`));
+    }
     if (!policy.allowed) {
       this.#ignored += 1;
       const previous = this.#lastIgnored;
@@ -977,6 +983,8 @@ class SingleConnectionService {
  * Reconnecting one channel cannot cancel the other channel's active work. */
 export class WechatPadService {
   #botLinks;
+  #chatDirectory;
+  botLinkSettings;
   #notifications = null;
   #options;
   #services = new Map();
@@ -984,9 +992,21 @@ export class WechatPadService {
   #transition = Promise.resolve();
   #disposed = false;
   constructor(options) {
+    this.#chatDirectory = new ChatDirectory(dshHomePath('wechatpad'));
     this.#botLinks = new BotLinks({ ctx: options.ctx, directory: dshHomePath('wechatpad'), logger: options.logger, send: (provider, chatId, text) => { const config = this.#readConfig(); return config.enabled && config.enabledProviders.includes(provider) ? this.#get(provider).sendNotification(chatId, text) : { ok: true, delivered: 0 }; } });
-    this.#options = { ...options, botLinks: this.#botLinks };
+    this.#options = { ...options, botLinks: this.#botLinks, onChat: (provider, message) => this.#chatDirectory.note(provider, message) };
     this.#config = resolveConfig(options.config);
+    this.botLinkSettings = createBotLinkSettings({
+      links: this.#botLinks, config: () => this.#readConfig(),
+      statuses: () => this.status().connections,
+      chats: async () => [
+        ...await this.#chatDirectory.list(),
+        ...(await this.listConversations()).items,
+        ...this.listSeenGroups().items.map(row => ({ provider: 'pad', chatId: row.chatId })),
+        ...this.#readConfig().allowedGroups.map(chatId => ({ provider: 'pad', chatId })),
+      ],
+      update: payload => this.updateBotLink(payload),
+    });
     const ids = new Set([this.#config.provider, ...this.#config.enabledProviders]);
     for (const provider of ids) {
       this.#services.set(provider, new SingleConnectionService({ ...this.#options, config: {
@@ -1027,6 +1047,7 @@ export class WechatPadService {
   async dispose() {
     this.#disposed = true;
     await this.#botLinks.dispose();
+    await this.#chatDirectory.flush();
     this.#notifications?.dispose();
     this.#notifications = null;
     await this.#transition.catch(() => {});

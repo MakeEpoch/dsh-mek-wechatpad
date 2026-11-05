@@ -42,6 +42,7 @@ export class BotLinks {
     await this.#ready;
     return structuredClone(this.#data.links.find(row => keyOf(row.provider, row.chatId) === keyOf(provider, chatId)) ?? null);
   }
+  async validateTarget(target) { await this.#ready; return this.#bridge().resolve(target); }
   async update({ provider, chatId, isGroup, target, revision }) {
     const work = this.#serial.then(async () => {
       await this.#ready;

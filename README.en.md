@@ -73,8 +73,10 @@ tests/                unit, host integration, settings-page render
 
 MIT licensed.
 
-## Bot links (0.1.8)
+## Bot links (0.1.9)
 
-Settings → WeChat → Sessions → Bot links binds a WechatPad group to a Bot group, or a WeChat private chat to a Main Bot only. Requires the optional `mekBotBridge` v1 service (downstream Bot 0.2.8). Identity and chat-type restrictions are validated server-side on every use. Existing access and mention policies still apply. Unlinked chats retain their ordinary Sessions; removed or demoted targets fail without creating a fallback Session.
+The right-side settings of a Main Bot or Bot group bind a WechatPad group to a Bot group, or a WeChat private chat to a Main Bot only. Requires the optional `mekBotBridge` v1 service (downstream Bot 0.2.9). Identity and chat-type restrictions are validated server-side on every use. Existing access and mention policies still apply. Unlinked chats retain their ordinary Sessions; removed or demoted targets fail without creating a fallback Session.
 
 Visible text replies are mirrored; hidden Bot turns, reasoning and user echoes are excluded. Incoming messages queue; `/stop` targets the linked conversation. Approval, credentials and interactive cards remain in DSH. Historical replay, cross-end card answers, generated-file forwarding and the upstream eight-platform IM module are outside this version. Links are atomically stored with a revision in `wechatpad/bot-links.json` and saved independently from connection settings.
+
+Choose either WechatPad or WeChat robot (iLink) and select a discovered user; send the connection a private message first, then refresh. Groups are selected from the Bot group settings and support WechatPad only. Known chat IDs and names are stored without message bodies or reply context tokens. The global WeChat Sessions settings now show a summary. The optional `wechatBotLinks` v1 service distinguishes missing/incompatible plugins, startup, disabled/unconfigured/signed-out connections, reconnecting, failures and readiness. Existing links survive disconnection; creating links requires a ready connection.

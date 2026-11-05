@@ -50,6 +50,15 @@ export function apply(ctx, raw) {
   installOutboundArtifactTool(ctx, { onRegistered: (sessionId) => logger('info', `微信附件工具及指导已挂载：${sessionId}`) });
 
   let service = null;
+  // Optional consumers can distinguish an absent plugin from a starting service.
+  ctx.provide?.('wechatBotLinks', {
+    version: 1,
+    view: target => service ? service.botLinkSettings.view(target) : Promise.resolve({ status: 'starting', connections: [], chats: [], links: [] }),
+    update: (target, payload) => {
+      if (!service) throw new Error('微信插件仍在启动，请稍后重试。');
+      return service.botLinkSettings.update(target, payload);
+    },
+  });
 
   ctx.effect(() => {
     const start = async () => {

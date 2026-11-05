@@ -3,6 +3,9 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { BotLinks } from '../host/bot-links.js';
+import { createBotLinkSettings, linkConnectionState } from '../host/bot-link-settings.js';
+import { ChatDirectory } from '../host/chat-directory.js';
+import { readFile } from 'node:fs/promises';
 
 async function fixture(t) {
   const directory = await mkdtemp('/tmp/wechat-bot-links-');
@@ -89,4 +92,56 @@ test('the settings facade uses the optional service injection scope and releases
   assert.equal((await scoped.view()).available, true);
   await scoped.dispose();
   assert.equal((await scoped.view()).available, false);
+});
+
+test('target settings separate groups and robot users, preserve offline links, and refuse takeover', async t => {
+  const f = await fixture(t);
+  let connected = true;
+  const config = { enabled: true, enabledProviders: ['pad', 'weixin'], baseUrl: 'fixture', token: 'private-fixture-token', wxid: 'fixture-account', dmPolicy: 'disabled', groupPolicy: 'open', groupRequireMention: true };
+  const settings = createBotLinkSettings({ links: f.links, config: () => config,
+    statuses: () => ({ pad: { connected, phase: connected ? 'connected' : 'error' }, weixin: { connected: true, phase: 'connected' } }),
+    chats: async () => [{ provider: 'pad', chatId: 'team@chatroom', label: 'Team' }, { provider: 'weixin', chatId: 'opaque-user', label: 'Robot user' }, { provider: 'pad', chatId: 'person', label: 'Person' }],
+    update: payload => f.links.update(payload),
+  });
+  const main = { kind: 'bot', id: 'chief' }, group = { kind: 'room', id: 'team' };
+  assert.deepEqual((await settings.view(group)).chats.map(row => row.chatId), ['team@chatroom']);
+  const privateView = await settings.view(main);
+  assert.equal(privateView.connections.find(row => row.provider === 'weixin').policy, 'open', 'iLink does not inherit Pad DM policy');
+  assert.equal(JSON.stringify(privateView).includes(config.token), false);
+  assert.deepEqual(privateView.chats.map(row => row.chatId), ['opaque-user', 'person']);
+  await settings.update(main, { provider: 'weixin', chatId: 'opaque-user', revision: 0 });
+  await settings.update(group, { provider: 'pad', chatId: 'team@chatroom', revision: 1 });
+  await assert.rejects(settings.update(main, { provider: 'pad', chatId: 'team@chatroom', revision: 2 }), /微信群只能/);
+  await assert.rejects(settings.update(main, { provider: 'weixin', chatId: 'team@chatroom', revision: 2 }), /不支持/);
+  await assert.rejects(settings.view({ kind: 'bot', id: 'worker' }), /eligible/);
+  f.targets.push({ kind: 'bot', id: 'other-main', name: 'Other' });
+  await assert.rejects(settings.update({ kind: 'bot', id: 'other-main' }, { provider: 'weixin', chatId: 'opaque-user', revision: 2 }), /其他目标/);
+  connected = false;
+  assert.equal((await settings.view(group)).connections[0].state, 'error');
+  assert.equal((await settings.view(group)).links.length, 1);
+  await assert.rejects(settings.update(group, { provider: 'pad', chatId: 'new@chatroom', revision: 2 }), /尚未就绪/);
+  await settings.update(group, { provider: 'pad', chatId: 'team@chatroom', remove: true, revision: 2 });
+  assert.equal((await settings.view(group)).links.length, 0, 'offline unlink remains available');
+  await assert.rejects(settings.update(main, { provider: 'weixin', chatId: 'new-user', revision: 0 }), /其他窗口/);
+});
+
+test('availability distinguishes disabled, incomplete, signed-out, connecting, disconnected and failed connections', () => {
+  const cfg = { enabled: true, enabledProviders: ['pad', 'weixin'], baseUrl: 'fixture', token: 'test', wxid: 'test' };
+  assert.equal(linkConnectionState({ ...cfg, enabled: false }, {}, 'pad'), 'disabled');
+  assert.equal(linkConnectionState({ ...cfg, token: '' }, {}, 'pad'), 'unconfigured');
+  assert.equal(linkConnectionState(cfg, { phase: 'unconfigured' }, 'weixin'), 'login-required');
+  assert.equal(linkConnectionState(cfg, { phase: 'starting' }, 'weixin'), 'connecting');
+  assert.equal(linkConnectionState(cfg, { phase: 'stopped' }, 'pad'), 'disconnected');
+  assert.equal(linkConnectionState(cfg, { phase: 'error', connected: true }, 'pad'), 'error');
+  assert.equal(linkConnectionState(cfg, { phase: 'connected', connected: true }, 'weixin'), 'ready');
+});
+
+test('discovered robot users persist without message bodies or protocol context credentials', async t => {
+  const f = await fixture(t), directory = new ChatDirectory(f.directory);
+  await directory.note('weixin', { chatId: 'opaque-open-id', senderName: 'Fixture user', text: 'private body', contextToken: 'private-context-token' });
+  await directory.note('pad', { chatId: 'team@chatroom', isGroup: true, senderName: 'Member name' });
+  const disk = await readFile(join(f.directory, 'known-chats.json'), 'utf8');
+  assert.equal(disk.includes('private'), false);
+  const restored = new ChatDirectory(f.directory);
+  assert.deepEqual(await restored.list(), [{ provider: 'weixin', chatId: 'opaque-open-id', label: 'Fixture user' }, { provider: 'pad', chatId: 'team@chatroom', label: 'team@chatroom' }]);
 });
