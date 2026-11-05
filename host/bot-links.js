@@ -8,8 +8,9 @@ const sameTarget = (a, b) => a?.kind === b?.kind && a?.id === b?.id;
 /** Transport-neutral bindings; the Bot plugin validates identities on every use. */
 export class BotLinks {
   #ctx; #directory; #send; #logger; #data = { version: 1, revision: 0, links: [] };
-  #ready; #serial = Promise.resolve(); #dispose; #stopped = false; #seen = new Set(); #started = false; #lastError = ''; #loaded = false; #activeBridge = null;
-  constructor({ ctx, directory, send, logger = () => {} }) {
+  #ready; #serial = Promise.resolve(); #dispose; #stopped = false; #seen = new Set(); #started = false; #lastError = ''; #loaded = false; #activeBridge = null; #typing;
+  constructor({ ctx, directory, send, logger = () => {}, typing }) {
+    this.#typing = typing;
     this.#ctx = ctx; this.#directory = directory; this.#send = send; this.#logger = logger;
     this.#ready = readFile(join(directory, 'bot-links.json'), 'utf8').then(raw => {
       const data = JSON.parse(raw);
@@ -63,6 +64,7 @@ export class BotLinks {
       await writeFile(temp, JSON.stringify(data), { mode: 0o600 });
       await rename(temp, join(this.#directory, 'bot-links.json'));
       this.#data = data;
+      this.#typing?.releasePrefix(`linked:${keyOf(provider, chatId)}`);
       return this.view();
     });
     this.#serial = work.catch(() => {});
@@ -77,20 +79,31 @@ export class BotLinks {
     const current = await this.binding(binding.provider, binding.chatId);
     if (!sameTarget(current?.target, binding.target)) throw new Error('聊天关联已改变，请重新发送消息。');
     await this.resolve(binding);
-    return this.#bridge().send(binding.target, {
+    const bridge = this.#bridge();
+    if (binding.target.kind === 'bot' && prepared.mode === 'interrupt' && bridge.supportsInterrupt !== true) throw new Error('当前 Bot 插件不支持关联私聊打断，请更新 Bot 插件后重试。');
+    const result = await bridge.send(binding.target, {
       text: prepared.text, images: prepared.images,
+      mode: binding.target.kind === 'bot' && prepared.mode === 'interrupt' ? 'interrupt' : 'queue',
       requestId: `wechatpad:${binding.provider}:${message.messageId || randomUUID()}`.slice(0, 128),
     });
+    const latest = await this.binding(binding.provider, binding.chatId);
+    if (sameTarget(latest?.target, binding.target) && typeof bridge.activity === 'function') this.#typing?.acquire(binding.provider, binding.chatId, `linked:${keyOf(binding.provider, binding.chatId)}`, async () => {
+      const current = await this.binding(binding.provider, binding.chatId);
+      if (!sameTarget(current?.target, binding.target)) return false;
+      return (await this.#bridge().activity(binding.target)).busy;
+    });
+    return result;
   }
-  async stop(binding) { await this.resolve(binding); return this.#bridge().stop(binding.target); }
+  async stop(binding) { this.#typing?.releasePrefix(`linked:${keyOf(binding.provider, binding.chatId)}`); await this.resolve(binding); return this.#bridge().stop(binding.target); }
   start() {
     if (this.#started) return;
     this.#started = true;
     const connect = sub => {
       const bridge = sub.get?.('mekBotBridge') ?? sub.mekBotBridge;
+      if (typeof bridge.activity !== 'function') this.#logger('warn', '当前 Bot 插件未提供关联输入状态，请更新 Bot 插件。');
       this.#activeBridge = bridge;
       const off = bridge.subscribe(event => { void this.#outgoing(event).catch(error => (this.#lastError = error.message, this.#logger('warn', `Bot 回复投递失败：${error.message}`))); });
-      sub.effect(() => () => { off(); if (this.#activeBridge === bridge) this.#activeBridge = null; }, 'wechatpad: Bot message subscription');
+      sub.effect(() => () => { off(); this.#typing?.releasePrefix('linked:'); if (this.#activeBridge === bridge) this.#activeBridge = null; }, 'wechatpad: Bot message subscription');
     };
     if (this.#ctx.inject) { const fiber = this.#ctx.inject(['mekBotBridge'], connect); this.#dispose = () => fiber.dispose(); }
     else if (this.#ctx.get?.('mekBotBridge')) this.#dispose = this.#ctx.get('mekBotBridge').subscribe(event => { void this.#outgoing(event).catch(error => this.#logger('warn', error.message)); });
@@ -112,5 +125,5 @@ export class BotLinks {
       } catch (error) { this.#lastError = error.message; this.#logger('warn', `Bot 回复投递失败：${error.message}`); }
     }
   }
-  async dispose() { this.#stopped = true; await this.#serial; await this.#dispose?.(); }
+  async dispose() { this.#stopped = true; this.#typing?.releasePrefix('linked:'); await this.#serial; await this.#dispose?.(); }
 }

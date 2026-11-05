@@ -14,7 +14,7 @@ async function fixture(t) {
     { kind: 'room', id: 'team', name: 'Team', sessionId: 'team-part-3' },
   ];
   const bridge = {
-    version: 1, targets: async () => targets,
+    version: 1, supportsInterrupt: true, targets: async () => targets,
     resolve: async target => { const found = targets.find(row => row.kind === target?.kind && row.id === target?.id); if (!found) throw new Error('not an eligible Main Bot or group'); return found; },
     send: async (target, content) => { await bridge.resolve(target); prompts.push({ target, content }); },
     stop: async () => true,
@@ -144,4 +144,22 @@ test('discovered robot users persist without message bodies or protocol context 
   assert.equal(disk.includes('private'), false);
   const restored = new ChatDirectory(f.directory);
   assert.deepEqual(await restored.list(), [{ provider: 'weixin', chatId: 'opaque-open-id', label: 'Fixture user' }, { provider: 'pad', chatId: 'team@chatroom', label: 'team@chatroom' }]);
+});
+
+test('linked private messages forward interrupt preferences and activity tracking, while groups remain queued', async t => {
+  const f = await fixture(t), calls = [];
+  f.bridge.activity = async () => ({ busy: true });
+  const typing = { acquire: (...args) => calls.push(args), releasePrefix: () => {} };
+  const links = new BotLinks({ ...f.options, typing });
+  t.after(() => links.dispose());
+  await links.update({ provider: 'weixin', chatId: 'robot-user', target: { kind: 'bot', id: 'chief' }, revision: 0 });
+  await links.receive(await links.binding('weixin', 'robot-user'), { messageId: '1' }, { text: 'Stop', mode: 'interrupt' });
+  assert.equal(f.prompts[0].content.mode, 'interrupt');
+  assert.equal(calls[0][0], 'weixin'); assert.equal(await calls[0][3](), true);
+  await links.update({ provider: 'pad', chatId: 'team@chatroom', isGroup: true, target: { kind: 'room', id: 'team' }, revision: 1 });
+  await links.receive(await links.binding('pad', 'team@chatroom'), { messageId: '2' }, { text: 'Group', mode: 'interrupt' });
+  assert.equal(f.prompts[1].content.mode, 'queue');
+  f.bridge.supportsInterrupt = false;
+  await assert.rejects(links.receive(await links.binding('weixin', 'robot-user'), { messageId: '3' }, { text: 'Do not silently queue', mode: 'interrupt' }), /请更新/);
+  assert.equal(f.prompts.length, 2);
 });

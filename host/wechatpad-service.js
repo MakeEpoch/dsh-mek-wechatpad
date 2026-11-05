@@ -37,6 +37,7 @@ import { stageMedia } from './media.js';
 import { conversationCatalogFor } from './conversations.js';
 import { createBotLinkSettings } from './bot-link-settings.js';
 import { ChatDirectory } from './chat-directory.js';
+import { TypingSignals } from './typing-signals.js';
 import { outboundArtifactRegistry, materializeOutboundArtifact, releaseOutboundArtifact, prepareReplyMedia } from './vendor/artifact.js';
 
 const STATUS_LINE_INTERVAL_MS = 3_000;
@@ -94,8 +95,9 @@ class SingleConnectionService {
    *   deployment can never point the service at a different adapter by accident;
    *   this seam exists so tests (and a future multi-account host) can supply one.
    */
-  constructor({ ctx, config, logger, createConnection: create, botLinks, onChat }) {
+  constructor({ ctx, config, logger, createConnection: create, botLinks, onChat, typingSignals }) {
     this.#botLinks = botLinks;
+    this.typingSignals = typingSignals;
     this.onChat = onChat;
     this.#ctx = ctx;
     this.#logger = logger ?? (() => {});
@@ -494,7 +496,7 @@ class SingleConnectionService {
     const context = message.isGroup
       ? this.#groupContext.snapshot(this.#configuredProvider(), message.chatId, contextCursor) : [];
     if (binding) {
-      await this.#botLinks.receive(binding, message, { ...prepared, text: withGroupContext(prepared.text, context) });
+      await this.#botLinks.receive(binding, message, { ...prepared, text: withGroupContext(prepared.text, context), mode: config.incomingMessageMode });
       if (context.length) await this.#groupContext.clearThrough(this.#configuredProvider(), message.chatId, contextCursor);
       return;
     }
@@ -754,11 +756,13 @@ class SingleConnectionService {
       },
     };
     this.#turns.set(key,turn);
+    turn.stopTyping = this.typingSignals?.acquire(this.#configuredProvider(), chatId, `ordinary:${key}`);
     return turn;
   }
   #stopDelivery(key) {
     const turn = this.#turns.get(key); if (!turn) return;
     this.#turns.delete(key); turn.controller.abort();
+    turn.stopTyping?.();
     if (turn.timer) clearTimeout(turn.timer);
   }
   #finishTurn(chatId) {
@@ -983,6 +987,7 @@ class SingleConnectionService {
  * Reconnecting one channel cannot cancel the other channel's active work. */
 export class WechatPadService {
   #botLinks;
+  #typingSignals;
   #chatDirectory;
   botLinkSettings;
   #notifications = null;
@@ -992,9 +997,14 @@ export class WechatPadService {
   #transition = Promise.resolve();
   #disposed = false;
   constructor(options) {
+    this.#typingSignals = new TypingSignals({
+      enabled: provider => { const c = this.#readConfig(); return c.enabled && c.enabledProviders.includes(provider) && c.weixinTyping; },
+      send: (provider, chatId, on) => this.#services.get(provider)?.typing(chatId, on) ?? false,
+      logger: options.logger,
+    });
     this.#chatDirectory = new ChatDirectory(dshHomePath('wechatpad'));
-    this.#botLinks = new BotLinks({ ctx: options.ctx, directory: dshHomePath('wechatpad'), logger: options.logger, send: (provider, chatId, text) => { const config = this.#readConfig(); return config.enabled && config.enabledProviders.includes(provider) ? this.#get(provider).sendNotification(chatId, text) : { ok: true, delivered: 0 }; } });
-    this.#options = { ...options, botLinks: this.#botLinks, onChat: (provider, message) => this.#chatDirectory.note(provider, message) };
+    this.#botLinks = new BotLinks({ typing: this.#typingSignals, ctx: options.ctx, directory: dshHomePath('wechatpad'), logger: options.logger, send: (provider, chatId, text) => { const config = this.#readConfig(); return config.enabled && config.enabledProviders.includes(provider) ? this.#get(provider).sendNotification(chatId, text) : { ok: true, delivered: 0 }; } });
+    this.#options = { ...options, typingSignals: this.#typingSignals, botLinks: this.#botLinks, onChat: (provider, message) => this.#chatDirectory.note(provider, message) };
     this.#config = resolveConfig(options.config);
     this.botLinkSettings = createBotLinkSettings({
       links: this.#botLinks, config: () => this.#readConfig(),
@@ -1047,6 +1057,7 @@ export class WechatPadService {
   async dispose() {
     this.#disposed = true;
     await this.#botLinks.dispose();
+    await this.#typingSignals.dispose();
     await this.#chatDirectory.flush();
     this.#notifications?.dispose();
     this.#notifications = null;
