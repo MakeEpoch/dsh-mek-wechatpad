@@ -219,6 +219,7 @@ export class PadConnection {
     const client = new WechatPadClient({
       baseUrl: target.baseUrl,
       key: target.key,
+      bridgeToken: config.bridgeToken,
       apiPrefix: target.apiPrefix,
       wxid: target.wxid,
       timeoutMs: Math.min(15_000, this.#config.requestTimeoutSeconds * 1000),
@@ -242,6 +243,7 @@ export class PadConnection {
     this.#client = new WechatPadClient({
       baseUrl: target.baseUrl,
       key: target.key,
+      bridgeToken: config.bridgeToken,
       apiPrefix: target.apiPrefix,
       wxid: target.wxid,
       timeoutMs: config.requestTimeoutSeconds * 1000,
@@ -371,6 +373,7 @@ export class PadConnection {
     if (!base || !wxid) return;
     try {
       const response = await fetch(`${base.replace(/\/+$/, '')}/bridge/accounts`, {
+        headers: { 'X-Bridge-Token': this.#config.bridgeToken },
         signal: AbortSignal.timeout(NICKNAME_TIMEOUT_MS),
       });
       if (!response.ok) return;

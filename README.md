@@ -109,6 +109,8 @@ iLink 的回复凭证、去重信息及接收游标保存在账号目录下 `sta
 | 直连 WechatPad | Pad 与本机/内网直通 | WechatPad 地址、Key；接收方式选择 WebSocket 推送或 HTTP 回调 |
 | WeChat Bridge | 由 Bridge 管理账号，或需要与其他消费者并行 | Bridge 地址、Bridge Token、机器人 wxid；固定订阅 `/ws/outbound`，发送自动走 Bridge 代理，无需 Pad Key |
 
+wechatReal08 部署使用「WeChat Bridge」接入，地址填写 `http://<服务主机>:8062`，Token 填服务端的 `WECHAT_BRIDGE_TOKEN`，机器人 wxid 填当前已登录微信。`receiveMode: bridge`、`bridgeBaseUrl`、`bridgeToken`、`bridgeAccounts` 字段继续使用；不再需要独立 wechat-bridge 服务。WS 订阅与 HTTP 发送共用 Token，插件不会接管服务端的 Webhook。服务端 WS 为实时分发，断线期间不补发；后台 Webhook 独立持久化重试。
+
 Bridge 的客户端标识在「高级」中设置，默认 `dsh`；同一 Bridge 的消费者应使用不同标识。现有 `receiveMode: bridge` 配置会直接显示为 WeChat Bridge，无需迁移。旧版 `apiPrefix` 代理组合会标注为旧版配置，选择新的接入方式并保存后才切换路径。
 
 仅直连 WechatPad 时显示接收方式：

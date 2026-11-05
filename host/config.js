@@ -92,13 +92,13 @@ export const Config = z.object({
   bridgeBaseUrl: z
     .string()
     .default('')
-    .description('WeChat Bridge 服务地址，例如 http://127.0.0.1:8002；Bridge 接入时必填。')
+    .description('wechatReal08 内置 Bridge 地址，例如 http://127.0.0.1:8062；Bridge 接入时必填。')
     .role('volatile').extra('volatile', true),
   bridgeToken: z
     .string()
     .role('secret')
     .extra('volatile', true)
-    .description('Bridge 的 ws_server.client.token；只写不读。'),
+    .description('wechatReal08 的 WECHAT_BRIDGE_TOKEN；订阅和 API 共用，只写不读。'),
   bridgeAccounts: z
     .string()
     .default('')
@@ -475,6 +475,7 @@ export function outboundTarget(config) {
     const wxid = config.wxid || firstAccount(config.bridgeAccounts);
     return {
       baseUrl,
+      bridgeToken: config.bridgeToken,
       // The Bridge fills in the auth_key; sending carries no separate credential.
       key: '',
       apiPrefix: '/proxy',

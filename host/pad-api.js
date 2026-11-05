@@ -24,6 +24,7 @@ export const SEND_CHUNK_DELAY_MS = 1100;
 export class WechatPadClient {
   #baseUrl;
   #key;
+  #bridgeToken;
   #apiPrefix;
   #wxid;
   #timeoutMs;
@@ -38,9 +39,10 @@ export class WechatPadClient {
    * @param {number} [options.timeoutMs] per-request timeout.
    * @param {(level: string, msg: string, extra?: unknown) => void} [options.logger]
    */
-  constructor({ baseUrl, key, apiPrefix = '', wxid = '', timeoutMs = 20000, logger = () => {} }) {
+  constructor({ baseUrl, key, bridgeToken = '', apiPrefix = '', wxid = '', timeoutMs = 20000, logger = () => {} }) {
     this.#baseUrl = String(baseUrl ?? '').replace(/\/+$/, '');
     this.#key = String(key ?? '').trim();
+    this.#bridgeToken = String(bridgeToken).trim();
     this.#apiPrefix = String(apiPrefix ?? '').trim();
     this.#wxid = String(wxid ?? '').trim();
     this.#timeoutMs = timeoutMs;
@@ -161,7 +163,11 @@ export class WechatPadClient {
     try {
       const response = await fetch(query, {
         method,
-        headers: payload === undefined ? { accept: 'application/json' } : { 'content-type': 'application/json', accept: 'application/json' },
+        headers: {
+          accept: 'application/json',
+          ...(payload === undefined ? {} : { 'content-type': 'application/json' }),
+          ...(this.#apiPrefix && this.#bridgeToken ? { 'X-Bridge-Token': this.#bridgeToken } : {}),
+        },
         body: payload === undefined ? undefined : JSON.stringify(payload),
         signal: composite,
       });

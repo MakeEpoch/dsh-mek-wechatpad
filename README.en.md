@@ -77,3 +77,7 @@ tests/                unit, host integration, settings-page render
 ```
 
 MIT licensed.
+
+## Embedded gateway
+
+For wechatReal08, keep `receiveMode: bridge` and set `bridgeBaseUrl` to `http://<host>:8062`, `bridgeToken` to the server `WECHAT_BRIDGE_TOKEN`, and `bridgeAccounts` to the logged-in bot wxid. The same token authenticates WS subscriptions and HTTP sends. No standalone wechat-bridge process is needed. Server Webhook delivery has its own durable retries; WS is live fan-out without offline replay.
