@@ -1,31 +1,17 @@
-/**
- * The WechatPad connection: the plugin's original protocol, unchanged.
- *
- * It owns everything that is specific to Pad / WeChat Bridge:
- *  - the three receive modes (`websocket` behind dsh's own proxy route,
- *    `webhook` with the callback registered on the Pad, and `bridge` which
- *    subscribes to the Bridge's `/ws/outbound` feed);
- *  - the self-identity facts the Pad needs to decode a message (its wxid and
- *    group nickname), including learning the nickname from the Bridge;
- *  - outbound delivery through `OutboundSender` -> `WechatPadClient`.
- *
- * Decoding, chunking and policy stay in `inbound.js` / `outbound.js`; this file
- * only wires them to the `WechatConnection` contract (see `types.js`).
- */
+/** WechatPad: one WS receive path and authenticated HTTP sends. */
 import { createRequire } from 'node:module';
 import { padAttachments, isPendingPadFile } from '../pad-media.js';
 import { encodeVoice } from '../voice.js';
 
-import { bridgeAccounts, buildBridgeWsUrl, unwrapBridgeFrame } from '../bridge.js';
-import { firstAccount, outboundTarget } from '../config.js';
+import { buildPadWsUrl, unwrapPadFrame } from '../pad-feed.js';
+import { outboundTarget } from '../config.js';
 import { decodeMessage } from '../inbound.js';
 import { OutboundSender } from '../outbound.js';
 import { WechatPadClient } from '../pad-api.js';
-import { PushTransport, parseFrame } from '../transport.js';
-import { registerPushRoute, registerWebhookRoute } from '../ws-route.js';
+import { PushTransport } from '../transport.js';
 import { DEFAULT_CAPABILITIES, unsupportedFeature } from './types.js';
 
-/** How long a Bridge nickname lookup may take before the Pad starts anyway. */
+/** How long a server nickname lookup may take before the Pad starts anyway. */
 const NICKNAME_TIMEOUT_MS = 8_000;
 
 export class PadConnection {
@@ -33,39 +19,26 @@ export class PadConnection {
   id = 'pad';
   label = 'WechatPad';
 
-  /** Pad / Bridge can receive and send attachments through the Pad API. */
+  /** Pad can receive and send attachments through the Pad API. */
   capabilities = { ...DEFAULT_CAPABILITIES, media: true };
 
-  #ctx;
   #config;
   #logger;
   #handlers = null;
   #client = null;
   #sender = null;
   #transport = null;
-  #disposers = [];
-  #webhookToken;
-  #webhookUrl = '';
   #stopped = true;
   #lastError = '';
 
   /**
    * @param {object} options
-   * @param {import('@deepseek-ai/cordis').Context} options.ctx
    * @param {ReturnType<import('../config.js').resolveConfig>} options.config resolved Config.
    * @param {(level: string, msg: string) => void} [options.logger]
-   * @param {string} [options.webhookToken] token the Pad must present on the webhook.
    */
-  constructor({ ctx, config, logger, webhookToken }) {
-    this.#ctx = ctx;
+  constructor({ config, logger }) {
     this.#config = config;
     this.#logger = logger ?? (() => {});
-    this.#webhookToken = webhookToken ?? '';
-  }
-
-  /** The absolute webhook URL, once this connection has published it. */
-  get webhookUrl() {
-    return this.#webhookUrl;
   }
 
   /** Whether outbound calls have enough configuration to reach the Pad. */
@@ -77,23 +50,9 @@ export class PadConnection {
   async start(handlers) {
     this.#handlers = { ...handlers };
     this.#stopped = false;
-    const config = this.#config;
     this.#buildRuntimes();
-    this.#registerRoutes();
     this.#transport = this.#newTransport();
-    if (config.receiveMode === 'webhook') {
-      // `#registerRoutes` already kicked off an unawaited registration; this
-      // second, awaited one is what reports its result before start() returns.
-      await this.#registerWebhookOnPad();
-      return;
-    }
-    if (config.receiveMode === 'bridge') {
-      // Only the Bridge can name the account it serves, so the lookup stays
-      // scoped to bridge mode exactly as it was before the extraction.
-      await this.#loadSelfIdentity();
-      await this.#startBridgeSubscription();
-      return;
-    }
+    await this.#loadSelfIdentity();
     try {
       await this.#transport?.start();
     } catch (error) {
@@ -103,23 +62,8 @@ export class PadConnection {
 
   async stop() {
     this.#stopped = true;
-    for (const dispose of this.#disposers.reverse()) {
-      try {
-        await dispose();
-      } catch (error) {
-        this.#logger('debug', `释放微信路由失败：${error?.message ?? error}`);
-      }
-    }
-    this.#disposers = [];
-    if (this.#transport) {
-      this.#transport.stop();
-      this.#transport = null;
-    }
-    const client = this.#client;
-    if (client && this.#config.receiveMode === 'webhook' && this.#webhookUrl) {
-      await client.setCallback('', false).catch(() => {});
-    }
-    this.#webhookUrl = '';
+    this.#transport?.stop();
+    this.#transport = null;
     this.#sender = null;
     this.#client = null;
     this.#handlers = null;
@@ -194,11 +138,9 @@ export class PadConnection {
       provider: this.id,
       connected: this.#transport?.connected ?? false,
       lastError: this.#lastError,
-      receiveMode: this.#config.receiveMode,
+      receiveMode: 'websocket',
       configured: target.configured,
-      baseUrl: this.#config.apiPrefix ? target.baseUrl : this.#config.baseUrl,
-      webhookUrl: this.#webhookUrl,
-      receiveModes: ['websocket', 'webhook', 'bridge'],
+      baseUrl: target.baseUrl,
       capabilities: { ...this.capabilities },
     };
   }
@@ -212,15 +154,13 @@ export class PadConnection {
     if (!target.configured) {
       return {
         ok: false,
-        error: this.#config.receiveMode === 'bridge' ? '需要 Bridge 地址和机器人 wxid' : '尚未填写地址或 key',
+        error: '需要服务地址、访问 Token 和机器人 wxid',
         detail: '配置不完整',
       };
     }
     const client = new WechatPadClient({
       baseUrl: target.baseUrl,
-      key: target.key,
-      bridgeToken: config.bridgeToken,
-      apiPrefix: target.apiPrefix,
+      token: target.token,
       wxid: target.wxid,
       timeoutMs: Math.min(15_000, this.#config.requestTimeoutSeconds * 1000),
     });
@@ -228,8 +168,8 @@ export class PadConnection {
     return {
       ok: status.ok,
       error: status.error,
-      detail: status.ok ? 'WechatPad 可访问，key 有效' : 'WechatPad 不可访问或 key 无效',
-      extra: { receiveMode: this.#config.receiveMode, webhookUrl: this.#webhookUrl },
+      detail: status.ok ? 'WechatPad 可访问，账号已登录' : 'WechatPad 不可访问或账号未登录',
+      extra: { receiveMode: 'websocket' },
     };
   }
 
@@ -237,14 +177,10 @@ export class PadConnection {
 
   #buildRuntimes() {
     const config = this.#config;
-    // Outbound always speaks the Pad protocol, but in bridge mode it goes
-    // through the Bridge's /proxy path and needs no Pad address or key.
     const target = outboundTarget(config);
     this.#client = new WechatPadClient({
       baseUrl: target.baseUrl,
-      key: target.key,
-      bridgeToken: config.bridgeToken,
-      apiPrefix: target.apiPrefix,
+      token: target.token,
       wxid: target.wxid,
       timeoutMs: config.requestTimeoutSeconds * 1000,
       logger: this.#logger,
@@ -252,80 +188,33 @@ export class PadConnection {
     this.#sender = new OutboundSender({ client: this.#client, logger: this.#logger });
   }
 
-  #registerRoutes() {
-    this.#disposers.push(registerPushRoute({
-      ctx: this.#ctx,
-      padTarget: () => this.#pushTarget(),
-      onFrame: (frame) => this.#handleFrame(frame),
-      logger: this.#logger,
-    }));
-    this.#disposers.push(registerWebhookRoute({
-      ctx: this.#ctx,
-      path: this.#config.webhookPath,
-      webhookAuth: () => ({ token: this.#webhookToken }),
-      onPayload: (payload) => this.#handleInbound(payload),
-      logger: this.#logger,
-    }));
-    void this.#registerWebhookOnPad();
-  }
-
-  #pushTarget() {
-    if (!this.#client?.configured) return null;
-    const origin = this.#config.baseUrl.replace(/^http/, 'ws').replace(/\/+$/, '');
-    return { url: `${origin}/ws/GetSyncMsg?key=${encodeURIComponent(this.#config.key)}`, key: this.#config.key };
-  }
-
   /** The bot's own identity, used to recognise group mentions and self-echo. */
   #identity() {
     return {
-      selfWxid: this.#config.selfWxid || this.#config.wxid,
+      selfWxid: this.#config.wxid,
       selfNickname: this.#config.selfNickname,
     };
   }
 
   #newTransport() {
-    if (this.#config.receiveMode === 'bridge') {
-      const config = this.#config;
-      const accounts = bridgeAccounts({ ...config, bridgeAccounts: config.bridgeAccounts || config.wxid });
-      if (!config.bridgeBaseUrl || !config.bridgeToken) {
-        this.#emitState({ phase: 'error', missing: 'Bridge 地址或 token', error: '接收方式为 bridge，但缺少 Bridge 地址或 token' });
-        return null;
-      }
-      if (accounts.length === 0) {
-        this.#emitState({ phase: 'error', missing: '机器人 wxid', error: 'bridge 模式需要填写机器人 wxid（订阅账号）' });
-        return null;
-      }
-      let url;
-      try {
-        url = buildBridgeWsUrl({
-          baseUrl: config.bridgeBaseUrl,
-          token: config.bridgeToken,
-          accounts,
-          clientId: config.bridgeClientId,
-        });
-      } catch (error) {
-        this.#emitState({ phase: 'error', error: String(error?.message ?? error) });
-        return null;
-      }
-      return new PushTransport({
-        url: config.bridgeBaseUrl,
-        open: async () => openSocket(url),
-        onFrame: (raw) => this.#handleBridgeFrame(raw),
-        logger: this.#logger,
-        onState: (state, detail) => this.#emitTransportState(state, detail, 'Bridge 订阅'),
-      });
+    const config = this.#config;
+    if (!outboundTarget(config).configured) {
+      this.#emitState({ phase: 'error', error: '需要服务地址、访问 Token 和机器人 wxid' });
+      return null;
     }
-    return new PushTransport({
-      url: this.#config.baseUrl,
-      open: async () => {
-        const target = this.#pushTarget();
-        if (!target) throw new Error('WechatPad 未配置');
-        return openSocket(target.url);
-      },
-      onFrame: (raw) => this.#handleFrame(raw),
-      logger: this.#logger,
-      onState: (state, detail) => this.#emitTransportState(state, detail, '微信推送连接'),
-    });
+    try {
+      const url = buildPadWsUrl(config);
+      return new PushTransport({
+        url: config.baseUrl,
+        open: async () => openSocket(url),
+        onFrame: (raw) => this.#handlePadFrame(raw),
+        logger: this.#logger,
+        onState: (state, detail) => this.#emitTransportState(state, detail, 'WechatPad WS'),
+      });
+    } catch (error) {
+      this.#emitState({ phase: 'error', error: String(error?.message ?? error) });
+      return null;
+    }
   }
 
   #emitTransportState(state, detail, what) {
@@ -363,17 +252,17 @@ export class PadConnection {
    *
    * A group mention renders the bot's NICKNAME, not its wxid, so without this
    * the mention check cannot match and `groupRequireMention` would silently drop
-   * every group message. The Bridge already knows the account it serves, so it
+   * every group message. The server already knows the account it serves, so it
    * is asked once at startup instead of making the operator copy the name.
    */
   async #loadSelfIdentity() {
     if (this.#config.selfNickname) return;
-    const wxid = this.#config.wxid || firstAccount(this.#config.bridgeAccounts) || this.#config.selfWxid;
-    const base = this.#config.bridgeBaseUrl;
+    const wxid = this.#config.wxid;
+    const base = this.#config.baseUrl;
     if (!base || !wxid) return;
     try {
       const response = await fetch(`${base.replace(/\/+$/, '')}/bridge/accounts`, {
-        headers: { 'X-Bridge-Token': this.#config.bridgeToken },
+        headers: { 'X-Bridge-Token': this.#config.token },
         signal: AbortSignal.timeout(NICKNAME_TIMEOUT_MS),
       });
       if (!response.ok) return;
@@ -385,81 +274,19 @@ export class PadConnection {
         this.#logger('info', `群聊 @ 检测使用机器人昵称「${nickname}」`);
       }
     } catch (error) {
-      this.#logger('debug', `未能从 Bridge 读取机器人昵称：${error?.message ?? error}`);
+      this.#logger('debug', `未能从服务端读取机器人昵称：${error?.message ?? error}`);
     }
   }
 
-  /**
-   * Subscribe to a WeChat Bridge's outbound WebSocket.
-   *
-   * The Bridge fans every inbound message out to its webhook target AND every
-   * `/ws/outbound` subscriber, so this seat sits beside the webhook the CMS API
-   * already owns instead of taking it over. Each subscriber carries its own
-   * `client_id`; using `dsh` keeps this plugin and the dashboard independent.
-   */
-  async #startBridgeSubscription() {
-    const transport = this.#transport;
-    if (!transport) return;
-    const accounts = bridgeAccounts({ ...this.#config, bridgeAccounts: this.#config.bridgeAccounts || this.#config.wxid });
-    try {
-      await transport.start();
-      this.#logger('info', `已订阅 WeChat Bridge ${this.#config.bridgeBaseUrl}（wxids=${accounts.join(',')}）`);
-    } catch (error) {
-      this.#emitState({ phase: 'error', error: String(error?.message ?? error) });
-    }
-  }
-
-  async #registerWebhookOnPad() {
-    const client = this.#client;
-    if (this.#config.receiveMode !== 'webhook' || !client?.configured) return;
-    let origin = '';
-    try {
-      origin = this.#ctx.webServer.getOrigin();
-    } catch (error) {
-      this.#emitState({ phase: 'error', error: `无法确定 dsh Web 地址：${error?.message ?? error}` });
-      return;
-    }
-    this.#webhookUrl = `${origin}${this.#config.webhookPath}`;
-    const result = await client.setCallback(this.#webhookUrl, true);
-    if (!result.ok) {
-      this.#emitState({ phase: 'error', error: `注册微信回调失败：${result.error}` });
-      return;
-    }
-    this.#emitState({ phase: 'connected', label: '已注册回调，等待微信消息' });
-  }
-
-  // ── 接收 ──────────────────────────────────────────────────────────────────
-
-  #handleFrame(raw) {
-    const parsed = parseFrame(raw, this.#identity());
-    if (parsed.kind === 'message') {
-      this.#emitMessage(parsed.message);
-      return;
-    }
-    if (parsed.kind === 'batch') {
-      for (const message of parsed.messages) this.#emitMessage(message);
-      return;
-    }
-    if (parsed.kind === 'status') {
-      const ok = parsed.payload.Success ?? parsed.payload.ok ?? true;
-      if (ok === false) {
-        this.#emitState({
-          phase: 'error',
-          error: String(parsed.payload.Text ?? parsed.payload.Message ?? '微信返回失败'),
-        });
-      }
-    }
-  }
-
-  /** Unwrap one Bridge frame and feed the normal inbound path. */
-  #handleBridgeFrame(raw) {
+  /** Unwrap one server frame and feed the normal inbound path. */
+  #handlePadFrame(raw) {
     let payload;
     try {
       payload = JSON.parse(raw);
     } catch {
       return;
     }
-    const frame = unwrapBridgeFrame(payload);
+    const frame = unwrapPadFrame(payload);
     if (!frame) return;
     if ('control' in frame) {
       if (frame.control === 'ping') this.#transport?.send('{"type":"pong"}');
@@ -468,9 +295,7 @@ export class PadConnection {
       }
       return;
     }
-    // The Bridge answers with the Bot's own wxid; remember it so self-echo
-    // filtering works even when `selfWxid` was left empty.
-    if (frame.wxid && !this.#config.selfWxid) this.#config.selfWxid = frame.wxid;
+    if (frame.wxid !== this.#config.wxid) return;
     if (frame.message) this.#handleInbound(frame.message);
   }
 
@@ -482,7 +307,7 @@ export class PadConnection {
     }
   }
 
-  /** Decode one raw payload (webhook body or Bridge payload) and hand it up. */
+  /** Decode one raw payload (WS payload) and hand it up. */
   #handleInbound(payload) {
     const message = decodeMessage(payload, this.#identity());
     if (!message) return;
@@ -503,10 +328,8 @@ async function openSocket(url) {
 
 /**
  * @param {object} options
- * @param {import('@deepseek-ai/cordis').Context} options.ctx
  * @param {ReturnType<import('../config.js').resolveConfig>} options.config
  * @param {(level: string, msg: string) => void} [options.logger]
- * @param {string} [options.webhookToken]
  * @returns {import('./types.js').WechatConnection}
  */
 export function createPadConnection(options) {

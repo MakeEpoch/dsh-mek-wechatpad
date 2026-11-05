@@ -1,14 +1,4 @@
-/**
- * Connection lifecycle: the WeChat push feed feeding one message handler.
- *
- * Three receive paths exist and all of them end in `onMessage`:
- *  - `websocket` — dsh's own `/ws` upgrade route proxies to WechatPad's
- *    `/ws/GetSyncMsg`, so the Pad's `key` never reaches the browser and the
- *    browser never needs a second origin's cookies;
- *  - `webhook`  — the Pad POSTs to a dsh route and this module installs the
- *    callback registration on the Pad;
- *  - `polling`  — fallback used by tests and manual `sync` calls.
- */
+/** WS connection lifecycle, reconnects, heartbeats and message deduplication. */
 import { decodeMessage } from './inbound.js';
 
 const HEARTBEAT_INTERVAL_MS = 30_000;
@@ -62,8 +52,7 @@ export class PushTransport {
 
   /**
    * Send one text frame upstream when the socket is open.
-   * WeChat Pad ignores client traffic; a Bridge expects `{"type":"pong"}` in
-   * reply to its heartbeat, so this is only meaningful in bridge mode.
+   * The server expects `{"type":"pong"}` in reply to its heartbeat.
    * @param {string} text frame body.
    * @returns {boolean} whether the frame was handed to an open socket.
    */
@@ -165,8 +154,7 @@ export class PushTransport {
 }
 
 /**
- * Deduplicates inbound pushes. WechatPad replays on reconnect, and webhook +
- * websocket may both deliver the same message; keyed by message id with a
+ * Deduplicates inbound pushes and repeated sync messages; keyed by message id with a
  * time-bound window so memory cannot grow without bound.
  */
 export class DedupeWindow {

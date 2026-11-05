@@ -32,7 +32,6 @@ import {
   describeSettingsEntry, panelReadModel, persistedFormValue, resetPanelSettings, savePanelSettings,
 } from './settings-bridge.js';
 import { DedupeWindow } from './transport.js';
-import { WS_PATH } from './ws-route.js';
 import { stageMedia } from './media.js';
 import { conversationCatalogFor } from './conversations.js';
 import { outboundArtifactRegistry, materializeOutboundArtifact, releaseOutboundArtifact, prepareReplyMedia } from './vendor/artifact.js';
@@ -68,7 +67,6 @@ class SingleConnectionService {
   #sessionResets = new Map();
   #turns = new Map();
   #delivery = null;
-  #webhookToken = randomUUID();
   #state = { phase: 'idle', since: Date.now(), lastError: '', messagesIn: 0, messagesOut: 0 };
   #received = 0;
   #ignored = 0;
@@ -120,9 +118,7 @@ class SingleConnectionService {
     // A profile that predates `provider` is a Pad profile and keeps the exact
     // "unconfigured" gate it always had; another protocol decides for itself.
     if (this.#configuredProvider() === 'pad' && !target.configured) {
-      this.#setState('unconfigured', this.#config.receiveMode === 'bridge'
-        ? 'Bridge 模式需要填写 Bridge 地址和机器人 wxid'
-        : '尚未填写 WechatPad 地址或 key，请在「设置 → 微信」中配置');
+      this.#setState('unconfigured', '请填写 WechatPad 服务地址、访问 Token 和机器人 wxid');
       return;
     }
     await this.#loadGroups();
@@ -157,7 +153,6 @@ class SingleConnectionService {
     this.#connection = await this.#createConnection(this.#config, {
       ctx: this.#ctx,
       logger: this.#logger,
-      webhookToken: this.#webhookToken,
     });
     this.#providerId = this.#connection.id;
     this.#peer = this.#ctx.connection.createPeer({ principal: { kind: 'owner' }, interactions: 'none' });
@@ -326,7 +321,7 @@ class SingleConnectionService {
     const answering = this.#questions?.canAnswer(message);
     // The QR bot does not use Pad's DM access policy or identity. Its own
     // enable switch controls reception; protocol echo/empty/system filtering
-    // still applies. Pad and Bridge retain their configured access controls.
+    // still applies. Pad retain their configured access controls.
     const weixin = this.#configuredProvider() === 'weixin';
     const accessConfig = weixin ? { ...this.#config, dmPolicy: 'open', selfWxid: '' } : this.#config;
     const policy = applyPolicy(answering ? { ...message, mentioned: true } : message, accessConfig, accessConfig.selfWxid);
@@ -757,8 +752,7 @@ class SingleConnectionService {
    * The panel's status snapshot.
    *
    * `provider`/`providerId` are the new, protocol-neutral fields; the legacy
-   * Pad-shaped ones (`receiveMode`, `baseUrl`, `webhookUrl`, `keyConfigured`)
-   * stay so an older panel build keeps rendering.
+   * Pad status includes its service address and fixed WS receive mode.
    */
   status() {
     const detail = this.#connectionDetail();
@@ -771,7 +765,7 @@ class SingleConnectionService {
       providerId: this.#providerId || this.#configuredProvider(),
       providerLabel: this.#connection?.label ?? '',
       capabilities: { ...this.#capabilities() },
-      receiveMode: this.#config.receiveMode,
+      receiveMode: this.#configuredProvider() === 'pad' ? 'websocket' : undefined,
       baseUrl: this.#config.baseUrl,
       delivery: this.#delivery?.status() ?? {listening:false,activeTurns:0,pendingPrompts:0},
       messagesReceived: this.#received,
@@ -779,9 +773,8 @@ class SingleConnectionService {
       lastIgnored: this.#lastIgnored,
       messagesIn: this.#state.messagesIn,
       messagesOut: this.#state.messagesOut,
-      webhookUrl: typeof detail.webhookUrl === 'string' ? detail.webhookUrl : '',
       connected: typeof detail.connected === 'boolean' ? detail.connected : (this.#state.phase === 'connected'),
-      keyConfigured: Boolean(this.#config.key || (this.#config.receiveMode === 'bridge' && this.#config.bridgeBaseUrl)),
+      tokenConfigured: Boolean(this.#config.token),
       // The adapter's own status, unchanged, so a protocol-specific field (a
       // bound bot id, a QR state) reaches the panel without the service having
       // to know what it means. `detail` is the same record under a stable name.
@@ -849,7 +842,7 @@ class SingleConnectionService {
    * When there is no live connection (the service never started, or the
    * profile is still unconfigured) a throwaway connection is created so the
    * panel's "test" button keeps working — that is the state a user is in when
-   * they open the panel to fix a wrong key.
+   * they open the panel to fix a wrong token.
    */
   async testConnection() {
     let connection = this.#connection;
@@ -857,18 +850,15 @@ class SingleConnectionService {
       connection = await this.#createConnection(this.#config, {
         ctx: this.#ctx,
         logger: this.#logger,
-        webhookToken: this.#webhookToken,
       });
     }
-    const detail = this.#connectionDetail();
     try {
       const result = await connection.test();
       const probe = result && typeof result === 'object' ? result : { ok: false, detail: '连接未返回检测结果' };
       return {
         ...probe,
         provider: connection.id,
-        receiveMode: this.#config.receiveMode,
-        webhookUrl: typeof detail.webhookUrl === 'string' ? detail.webhookUrl : '',
+        receiveMode: this.#configuredProvider() === 'pad' ? 'websocket' : undefined,
       };
     } catch (error) {
       return { ok: false, provider: connection.id, detail: '检测失败', error: String(error?.message ?? error) };
@@ -1017,7 +1007,7 @@ export class WechatPadService {
       if (JSON.stringify(next) === JSON.stringify(previous)) return;
       const common = ['requestTimeoutSeconds'];
       const transportFields = {
-        pad: [...common, 'baseUrl', 'key', 'apiPrefix', 'wxid', 'receiveMode', 'webhookHost', 'webhookPath', 'bridgeBaseUrl', 'bridgeToken', 'bridgeAccounts', 'bridgeClientId', 'selfWxid', 'selfNickname'],
+        pad: [...common, 'baseUrl', 'token', 'wxid', 'clientId', 'selfNickname'],
         weixin: ['weixinAccountFile', 'weixinBotType', 'weixinTyping', 'weixinReplyQuote'],
       };
       this.#config = next;
@@ -1081,14 +1071,6 @@ function stripUndefined(value) {
   return Object.fromEntries(Object.entries(value).filter(([, field]) => field !== undefined));
 }
 
-/** Absolute URL of the webhook the Pad should call, when it is known. */
-export function currentWebhookUrl(service) {
-  return service.status().webhookUrl;
-}
-
-
 function prefixOf(value) {
   return value || '/';
 }
-
-export { WS_PATH };

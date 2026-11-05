@@ -1,6 +1,6 @@
 # WechatPad for dsh
 
-Bridges WeChat into DeepSeek Harness through WechatPad (or WeChat Bridge). Messages become prompts in **real dsh Sessions**, so tools, approvals, history and subagents behave exactly as they do for a typed message; answers come back to the same chat. Everything is configured from the dsh settings page.
+Connects WeChat into DeepSeek Harness through WechatPad (wechatReal08). Messages become prompts in **real dsh Sessions**, so tools, approvals, history and subagents behave exactly as they do for a typed message; answers come back to the same chat. Everything is configured from the dsh settings page.
 
 This is a rewrite of hermes-agent's `hermes-plugin-wechatpad` (a Python platform adapter) against dsh 0.2.1-rc.2's plugin protocol: the Host owns the connection and scheduling, and the browser half contributes its page through the official `settings.section` slot.
 
@@ -17,29 +17,24 @@ npm run install:dsh:web                # install into the web profile
 
 Restart `dsh web`, reload the page, then open **Settings → WeChat**:
 
-1. Choose the connection: direct WechatPad needs a Pad address and key, then WebSocket or HTTP callback reception. WeChat Bridge needs its address, subscription token and bot wxid; both directions use the Bridge.
+1. Enable WechatPad and enter the service URL (port 8062), access token (`WECHAT_BRIDGE_TOKEN` on the server), and one logged-in bot wxid.
 2. Save, then press **Test connection** to check the saved API configuration.
-3. Pad / Bridge direct messages default to an allowlist. Add their permitted wxids or select a different policy. The QR bot does not use this allowlist.
+3. WechatPad direct messages default to an allowlist. Add their permitted wxids or select a different policy. The QR bot does not use this allowlist.
 4. Save; the plugin reloads with the new configuration and the next WeChat message starts a Session.
 
-Saving writes the profile's Cordis patch through dsh's own Settings service. The key field is declared `role('secret')`, so the page only ever reports that a secret is stored — never its value.
+Saving writes the profile's Cordis patch through dsh's own Settings service. The token field is declared `role('secret')`, so the page only ever reports that a secret is stored — never its value.
 
 ## Independent connections
 
-The WechatPad and iLink bot tabs have separate enable switches, live status, probes and reconnect actions. Both can receive and reply concurrently. Each owns its sessions, inbox and outbound path; session preferences remain shared. Access controls apply to Pad / Bridge only; the QR bot does not use their DM allowlist. Tab navigation never changes configuration. Save applies edits, Discard restores the saved form, and connection actions are blocked while their parameters have unsaved edits.
+The WechatPad and iLink bot tabs have separate enable switches, live status, probes and reconnect actions. Both can receive and reply concurrently. Each owns its sessions, inbox and outbound path; session preferences remain shared. Access controls apply to WechatPad only; the QR bot does not use their DM allowlist. Tab navigation never changes configuration. Save applies edits, Discard restores the saved form, and connection actions are blocked while their parameters have unsaved edits.
 
 Legacy profiles retain their existing `provider`. `enabledProviders: [pad, weixin]` enables both, while an explicit empty list disables both. Enable and save the iLink connection before generating a login QR. Credentials stay in a local 0600 file; tokens never cross the settings RPC. Real WeChat login and traffic still require verification with your account.
 
-## Receive modes and endpoints
+## WechatPad connection
 
-Only direct WechatPad shows the receive-mode selector. Bridge always subscribes to `/ws/outbound` and sends through `/proxy/{wxid}` without a Pad key. Its client ID is under Advanced (default `dsh`). Existing `receiveMode: bridge` profiles are recognized automatically. Legacy proxy combinations remain marked as legacy until a new connection is explicitly selected and saved.
+The plugin receives through `/ws/outbound` and sends through `/proxy/{wxid}/...`, using the same service token. Client ID defaults to `dsh` and lives under Advanced; each consumer needs a distinct ID. Server Webhook delivery remains independent. WS is live fan-out without offline replay.
 
-| Path | Purpose |
-| --- | --- |
-| `/dsh-wechatpad/ws` | Same-origin upgrade proxying WechatPad's `/ws/GetSyncMsg` push feed |
-| `/dsh-wechatpad/callback` | HTTP callback route registered on the Pad via `/message/SetCallback` |
-
-Both live on the dsh web server: the plugin adds no listener, no port and no second credential. Requests pass dsh's Host/Origin fence and browser authentication; the webhook additionally requires a per-process random token.
+On upgrade from 0.1.6, migrate connection settings once to `baseUrl`, `token`, `wxid`, `clientId`, then remove the old receive mode, key, API prefix, callback and `bridge*` settings. Runtime aliases are intentionally absent. Conversation history, allowlists and iLink credentials stay in place.
 
 ## Chat commands
 
@@ -59,11 +54,11 @@ The Host calls `ctx.typertGateway.invoke/stream` with a Peer created by `ctx.con
 
 ## Known limits
 
-- Both QR/iLink and Pad/Bridge receive images, voice and files, and return generated files through `wechatpad_return_file`. Images include actual model input; originals and documents are staged in the Session workspace. Voice uses local SILK/WAV decoding and the configured dsh speech service.
-- QR audio replies are sent as files; Pad/Bridge send native SILK voice up to 60 seconds, then fall back to files. Non-SILK transcoding requires ffmpeg.
+- Both QR/iLink and WechatPad receive images, voice and files, and return generated files through `wechatpad_return_file`. Images include actual model input; originals and documents are staged in the Session workspace. Voice uses local SILK/WAV decoding and the configured dsh speech service.
+- QR audio replies are sent as files; WechatPad send native SILK voice up to 60 seconds, then fall back to files. Non-SILK transcoding requires ffmpeg.
 - Limits: 16 inbound attachments / 64 MiB combined, 64 MiB per outgoing file; provider/model limits also apply. See [media implementation](docs/media.md).
 - Group "was I mentioned" depends on the Pad's `AtWxIDList` or the `@name` markup in the text; Pad builds differ slightly.
-- One plugin instance per Pad `key`, matching the Pad's single-account connection.
+- One WechatPad connection subscribes to one bot wxid.
 - Browser activation and real WeChat traffic must be verified in your own environment; the tests cover unit logic, the Host API and the rendered settings page.
 
 ## Layout
@@ -77,7 +72,3 @@ tests/                unit, host integration, settings-page render
 ```
 
 MIT licensed.
-
-## Embedded gateway
-
-For wechatReal08, keep `receiveMode: bridge` and set `bridgeBaseUrl` to `http://<host>:8062`, `bridgeToken` to the server `WECHAT_BRIDGE_TOKEN`, and `bridgeAccounts` to the logged-in bot wxid. The same token authenticates WS subscriptions and HTTP sends. No standalone wechat-bridge process is needed. Server Webhook delivery has its own durable retries; WS is live fan-out without offline replay.

@@ -7,7 +7,7 @@
  * arrive from dsh itself, exactly like the bundled settings pages.
  *
  * Connection, session and access settings are independent tabs. One connection
- * selector chooses Pad or Bridge; iLink is independently enabled.
+ * WechatPad uses one WS connection; iLink is independently enabled.
  * Changes stay local until explicitly saved; runtime actions use saved settings.
  *
  * Everything it shows comes from the Host over the plugin's own RPC channel —
@@ -215,7 +215,7 @@ function storeTab(id) {
 
 const EN = {
   title: '微信',
-  intro: '通过 WechatPad、WeChat Bridge 或扫码绑定腾讯 iLink 机器人，把微信接入 dsh。微信消息会进入真实会话，回复也回到同一个聊天。',
+  intro: '通过 WechatPad 或扫码绑定腾讯 iLink 机器人，把微信接入 dsh。微信消息会进入真实会话，回复也回到同一个聊天。',
   tabsLabel: '微信设置分区',
   tabPad: 'WechatPad',
   tabWeixin: '微信机器人',
@@ -223,7 +223,7 @@ const EN = {
   tabAccess: '访问控制',
   providerLabel: '微信接入方式',
   providerHint: '决定消息如何进入 dsh；切换后保存即按新接入方式重载。',
-  providerPad: 'WechatPad：直连 Pad / WeChat Bridge',
+  providerPad: 'WechatPad',
   providerWeixin: '微信机器人：扫码绑定腾讯 iLink，无需 Pad',
   providerCurrent: '当前接入方式',
   providerPadShort: 'WechatPad',
@@ -269,30 +269,16 @@ const EN = {
   weixinAdvanced: '回复设置',
   status: '状态',
   connection: '连接',
-  baseUrl: 'WechatPad 地址',
-  baseUrlHint: '',
-  key: 'Key',
-  keyHint: '',
-  keySaved: '已设置，留空保留',
-  apiPrefix: '接口前缀',
-  apiPrefixHint: '留空直连 WechatPad；填 /proxy 经 Bridge 代理，需要同时填写 wxid',
+  baseUrl: '服务地址',
+  baseUrlHint: '例如 http://127.0.0.1:8062',
+  token: '访问 Token',
+  tokenHint: '填写服务端 WECHAT_BRIDGE_TOKEN',
+  tokenSaved: '已设置，留空保留',
   wxid: '机器人 wxid',
-  wxidHint: '仅 Bridge 代理模式需要',
-  receiveMode: '接收方式',
-  receiveWebsocket: 'WebSocket 推送（推荐）',
-  receiveWebhook: 'HTTP 回调',
-  receiveBridge: 'wechatReal08 订阅',
-  bridgeConnectionHint: '连接 wechatReal08 内置 Bridge 收发消息，可与后台 Webhook 并行。',
-  webhookPath: '回调路径',
-  webhookPathHint: '插件会将此路径自动登记到 WechatPad；WechatPad 需要能访问 dsh 的 Web 地址。',
-  bridgeBaseUrl: 'Bridge 地址',
-  bridgeBaseUrlHint: '例如 http://192.168.10.5:8062',
-  bridgeToken: 'Bridge token',
-  bridgeTokenHint: '填写服务端 WECHAT_BRIDGE_TOKEN',
-  bridgeAccounts: '机器人 wxid',
-  bridgeAccountsHint: '填写机器人自己的 wxid，多个账号用逗号分隔。',
-  bridgeClientId: '客户端标识',
-  bridgeClientIdHint: '同一 Bridge 上的客户端标识不能重复。',
+  wxidHint: '填写已登录机器人的 wxid，一个连接对应一个账号。',
+  padConnectionHint: '连接 wechatReal08，通过 WebSocket 接收消息。后台 Webhook 独立投递。',
+  clientId: '客户端标识',
+  clientIdHint: '同一服务的每个消费者使用不同标识，默认 dsh。',
   requestTimeout: '请求超时（秒）',
   test: '检测连接',
   testOk: '连接正常',
@@ -329,7 +315,6 @@ const EN = {
   allowedGroups: '群白名单',
   allowedGroupsHint: '填写群 ID，逗号或换行分隔',
   groupMention: '群聊需 @ 机器人才响应',
-  selfWxid: '机器人 wxid（用于忽略自己的消息）',
   commandPrefix: '命令前缀',
   seenGroups: '发现群聊',
   seenGroupsHint: '加入白名单后保存生效。',
@@ -350,12 +335,6 @@ const EN = {
   enablePlugin: '启用插件',
   settingsUnavailable: '当前 profile 没有启用 dsh 设置服务，无法在此保存；请用「设置 → 插件」的配置表单。',
   settingsDiagnostic: '配置表单状态未就绪（仍可尝试保存）：',
-  routeMode: 'Pad 接入方式',
-  direct: '直连 WechatPad',
-  bridge: 'WeChat Bridge',
-  legacyProxy: '旧版 Bridge 代理配置',
-  legacyProxyHint: '此配置保留旧版代理行为。请选择“直连 WechatPad”或“WeChat Bridge”，填写对应信息后保存。',
-  legacyBaseUrl: '旧版代理地址',
   loading: '正在读取…',
 };
 
@@ -561,8 +540,7 @@ export function WechatPadSettings({ t, connection, locale }) {
   const [groupsOpen, setGroupsOpen] = React.useState(false);
   const [tab, setTab] = React.useState(readStoredTab);
   const [draft, setDraft] = React.useState({});
-  const [keyDraft, setKeyDraft] = React.useState('');
-  const [bridgeTokenDraft, setBridgeTokenDraft] = React.useState('');
+  const [tokenDraft, setTokenDraft] = React.useState('');
   const [users, setUsers] = React.useState('');
   const [groups, setGroups] = React.useState('');
   const [busy, setBusy] = React.useState('');
@@ -572,7 +550,6 @@ export function WechatPadSettings({ t, connection, locale }) {
   const [login, setLogin] = React.useState(null);
   const [verifyCode, setVerifyCode] = React.useState('');
   const alive = React.useRef(true);
-  const directReceiveMode = React.useRef('websocket');
   // The poll must not restart on every state change, so the ticket the current
   // session owns is kept in a ref and the interval depends on its identity.
   const loginTicket = React.useRef(null);
@@ -606,8 +583,8 @@ export function WechatPadSettings({ t, connection, locale }) {
         setUsers((settings?.settings?.allowedUsers ?? []).join(', '));
         setGroups((settings?.settings?.allowedGroups ?? []).join(', '));
         setDraft({});
-        setKeyDraft('');
-        setBridgeTokenDraft('');
+
+        setTokenDraft('');
       }
     } catch (failure) {
       if (alive.current) setError(failure.message || String(failure));
@@ -648,16 +625,16 @@ export function WechatPadSettings({ t, connection, locale }) {
   const setEnabled = (id, next) => set('enabledProviders', next ? [...new Set([...enabledProviders, id])] : enabledProviders.filter((value) => value !== id));
 
   const changed = Object.fromEntries(Object.entries(draft).filter(([field, value]) => JSON.stringify(value) !== JSON.stringify(base[field] ?? defaults[field])));
-  const dirty = Object.keys(changed).length > 0 || Boolean(keyDraft.trim() || bridgeTokenDraft.trim())
+  const dirty = Object.keys(changed).length > 0 || Boolean(tokenDraft.trim())
     || JSON.stringify(toList(users)) !== JSON.stringify(base.allowedUsers ?? [])
     || JSON.stringify(toList(groups)) !== JSON.stringify(base.allowedGroups ?? []);
-  const connectionFields = ['enabledProviders', 'receiveMode', 'apiPrefix', 'baseUrl', 'wxid', 'bridgeBaseUrl', 'bridgeAccounts', 'bridgeClientId', 'webhookPath', 'requestTimeoutSeconds', 'weixinBotType', 'weixinAccountFile'];
-  const padDirty = ['receiveMode', 'apiPrefix', 'baseUrl', 'wxid', 'bridgeBaseUrl', 'bridgeAccounts', 'bridgeClientId', 'webhookPath', 'requestTimeoutSeconds'].some((field) => Object.hasOwn(changed, field)) || Boolean(keyDraft.trim() || bridgeTokenDraft.trim()) || enabled('pad') !== savedProviders.includes('pad');
+  const connectionFields = ['enabledProviders', 'baseUrl', 'wxid', 'clientId', 'requestTimeoutSeconds', 'weixinBotType', 'weixinAccountFile'];
+  const padDirty = ['baseUrl', 'wxid', 'clientId', 'requestTimeoutSeconds'].some((field) => Object.hasOwn(changed, field)) || Boolean(tokenDraft.trim()) || enabled('pad') !== savedProviders.includes('pad');
   const weixinDirty = ['weixinBotType', 'weixinAccountFile'].some((field) => Object.hasOwn(changed, field)) || enabled('weixin') !== savedProviders.includes('weixin');
   const channelDirty = activeProvider === 'weixin' ? weixinDirty : padDirty;
-  const connectionDirty = connectionFields.some((field) => Object.hasOwn(changed, field)) || Boolean(keyDraft.trim() || bridgeTokenDraft.trim());
+  const connectionDirty = connectionFields.some((field) => Object.hasOwn(changed, field)) || Boolean(tokenDraft.trim());
   const discard = () => {
-    setDraft({}); setKeyDraft(''); setBridgeTokenDraft('');
+    setDraft({}); setTokenDraft('');
     setUsers((base.allowedUsers ?? []).join(', ')); setGroups((base.allowedGroups ?? []).join(', '));
     setError(''); setNotice(null);
   };
@@ -676,8 +653,7 @@ export function WechatPadSettings({ t, connection, locale }) {
         delete patch.allowedUsers;
         delete patch.allowedGroups;
       }
-      if (keyDraft.trim()) patch.key = keyDraft.trim();
-      if (bridgeTokenDraft.trim()) patch.bridgeToken = bridgeTokenDraft.trim();
+      if (tokenDraft.trim()) patch.token = tokenDraft.trim();
       // An undescribed form has no revision to compare against; the host then
       // resolves the current one instead of sending a stale expectation.
       await callRpc(connection, 'settings.update', { patch, expectedRevision: model?.revision });
@@ -695,10 +671,10 @@ export function WechatPadSettings({ t, connection, locale }) {
         await new Promise((resolve) => setTimeout(resolve, attempt === 0 ? 350 : 650));
         try {
           const next = await callRpc(connection, 'settings.get', {});
-          if (!Object.entries(patch).every(([field, value]) => field === 'key' || field === 'bridgeToken'
+          if (!Object.entries(patch).every(([field, value]) => field === 'token'
             ? next.settings?.[`${field}Configured`] === true
             : JSON.stringify(next.settings?.[field]) === JSON.stringify(value))) continue;
-          setModel(next); setDraft({}); setKeyDraft(''); setBridgeTokenDraft('');
+          setModel(next); setDraft({}); setTokenDraft('');
           setUsers((next.settings?.allowedUsers ?? []).join(', '));
           setGroups((next.settings?.allowedGroups ?? []).join(', '));
           setNotice(t('saved')); confirmed = true; break;
@@ -845,28 +821,6 @@ export function WechatPadSettings({ t, connection, locale }) {
   }, [connection, loginSession, refresh, t]);
 
   const h = React.createElement;
-  const bridgeReceive = values.receiveMode === 'bridge';
-  const legacyProxy = !bridgeReceive && Boolean(values.apiPrefix);
-  // The Pad connection choice owns both send and receive routing. Keep the wire
-  // format compatible with existing profiles: receiveMode=bridge already
-  // selects the Bridge for both directions in the Host.
-  const changeConnection = (mode) => {
-    if (!bridgeReceive) directReceiveMode.current = values.receiveMode === 'webhook' ? 'webhook' : 'websocket';
-    setDraft((previous) => ({
-      ...previous,
-      receiveMode: mode === 'bridge' ? 'bridge' : directReceiveMode.current,
-      apiPrefix: '',
-    }));
-  };
-  const providerField = () => h(Field, { label: t('routeMode') },
-    h('select', {
-      value: bridgeReceive ? 'bridge' : legacyProxy ? 'legacy' : 'direct', name: 'connectionMode',
-      onChange: (event) => changeConnection(event.target.value),
-    },
-    h('option', { value: 'bridge' }, t('bridge')),
-    h('option', { value: 'direct' }, t('direct')),
-    legacyProxy ? h('option', { value: 'legacy', disabled: true }, t('legacyProxy')) : null));
-
   const connectionHeader = (id, label) => {
     const live = channelStatus(id);
     const pending = id === 'weixin' ? weixinDirty : padDirty;
@@ -892,68 +846,23 @@ export function WechatPadSettings({ t, connection, locale }) {
   };
 
   const padPanel = () => h(React.Fragment, null,
+    h('p', { className: 'wxp-hint' }, t('padConnectionHint')),
+    h('div', { className: 'wxp-grid' },
+      h(Field, { label: t('baseUrl'), hint: t('baseUrlHint') },
+        h('input', { type: 'text', value: values.baseUrl ?? '', spellCheck: false, name: 'baseUrl', ...bindText(set, 'baseUrl') })),
+      h(Field, { label: t('token'), hint: t('tokenHint') },
+        h('input', { type: 'password', value: tokenDraft, autoComplete: 'off', spellCheck: false, name: 'token',
+          placeholder: model?.settings?.tokenConfigured ? t('tokenSaved') : '',
+          onInput: (event) => setTokenDraft(event.target.value), onChange: (event) => setTokenDraft(event.target.value) })),
+      h(Field, { label: t('wxid'), hint: t('wxidHint') },
+        h('input', { type: 'text', value: values.wxid ?? '', spellCheck: false, name: 'wxid', ...bindText(set, 'wxid') }))),
+    h('details', { className: 'wxp-advanced' },
+      h('summary', null, t('advanced')),
       h('div', { className: 'wxp-grid' },
-        !bridgeReceive ? h(Field, { label: t(legacyProxy ? 'legacyBaseUrl' : 'baseUrl'), hint: legacyProxy ? undefined : t('baseUrlHint') },
-          h('input', {
-            type: 'text', value: values.baseUrl ?? '', spellCheck: false, name: 'baseUrl',
-            ...bindText(set, 'baseUrl'),
-          })) : null,
-        legacyProxy ? h(Field, { label: t('wxid'), hint: t('wxidHint') },
-          h('input', {
-            type: 'text', value: values.wxid ?? '', spellCheck: false, name: 'wxid',
-            ...bindText(set, 'wxid'),
-          })) : null,
-        !bridgeReceive ? h(Field, { label: t('key'), hint: t('keyHint') },
-          h('input', {
-            type: 'password', value: keyDraft, autoComplete: 'off', spellCheck: false, name: 'key',
-            placeholder: model?.settings?.keyConfigured ? t('keySaved') : '',
-            onInput: (event) => setKeyDraft(event.target.value),
-            onChange: (event) => setKeyDraft(event.target.value),
-          })) : null,
-        !bridgeReceive && values.receiveMode === 'webhook' ? h(Field, { label: t('webhookPath'), hint: t('webhookPathHint') },
-          h('input', {
-            type: 'text', value: values.webhookPath ?? '/wechatpad/callback', spellCheck: false, name: 'webhookPath',
-            ...bindText(set, 'webhookPath'),
-          })) : null,
-        bridgeReceive
-          ? h(Field, { label: t('bridgeBaseUrl'), hint: t('bridgeBaseUrlHint') },
-            h('input', {
-              type: 'text', value: values.bridgeBaseUrl ?? '', spellCheck: false, name: 'bridgeBaseUrl',
-              ...bindText(set, 'bridgeBaseUrl'),
-            }))
-          : null,
-        bridgeReceive
-          ? h(Field, { label: t('bridgeToken'), hint: t('bridgeTokenHint') },
-            h('input', {
-              type: 'password', value: bridgeTokenDraft, autoComplete: 'off', spellCheck: false, name: 'bridgeToken',
-              placeholder: model?.settings?.bridgeTokenConfigured ? t('keySaved') : '',
-              onInput: (event) => setBridgeTokenDraft(event.target.value),
-              onChange: (event) => setBridgeTokenDraft(event.target.value),
-            }))
-          : null,
-        bridgeReceive
-          ? h(Field, { label: t('bridgeAccounts'), hint: t('bridgeAccountsHint') },
-            h('input', {
-              type: 'text', value: values.wxid || values.bridgeAccounts || '', spellCheck: false, name: 'bridgeAccounts',
-              ...bindText((field, value) => setDraft((previous) => ({ ...previous, [field]: value, wxid: '' })), 'bridgeAccounts'),
-            }))
-          : null,
-        null),
-      h('details', { className: 'wxp-advanced' },
-        h('summary', null, t('advanced')),
-        h('div', { className: 'wxp-grid' },
-          !bridgeReceive && !legacyProxy ? h(Field, { label: t('receiveMode') },
-          h('select', {
-            value: values.receiveMode ?? 'websocket', name: 'receiveMode',
-            onChange: (event) => setDraft((previous) => ({ ...previous, receiveMode: event.target.value, apiPrefix: '' })),
-          },
-          h('option', { value: 'websocket' }, t('receiveWebsocket')),
-          h('option', { value: 'webhook' }, t('receiveWebhook')))) : null,
-          h(Field, { label: t('requestTimeout') },
-            h('input', { type: 'number', min: 5, max: 120, value: values.requestTimeoutSeconds ?? 20, name: 'requestTimeoutSeconds', ...bindText(set, 'requestTimeoutSeconds', Number) })),
-          bridgeReceive ? h(Field, { label: t('bridgeClientId'), hint: t('bridgeClientIdHint') },
-            h('input', { type: 'text', value: values.bridgeClientId ?? 'dsh', spellCheck: false, name: 'bridgeClientId', ...bindText(set, 'bridgeClientId') })) : null)),
-      legacyProxy ? h('p', { className: 'wxp-hint' }, t('legacyProxyHint')) : null);
+        h(Field, { label: t('requestTimeout') },
+          h('input', { type: 'number', min: 5, max: 120, value: values.requestTimeoutSeconds ?? 20, name: 'requestTimeoutSeconds', ...bindText(set, 'requestTimeoutSeconds', Number) })),
+        h(Field, { label: t('clientId'), hint: t('clientIdHint') },
+          h('input', { type: 'text', value: values.clientId ?? 'dsh', spellCheck: false, name: 'clientId', ...bindText(set, 'clientId') })))));
 
   const weixinPanel = () => {
     const state = login?.state ?? 'wait';
@@ -1090,13 +999,13 @@ export function WechatPadSettings({ t, connection, locale }) {
         } },
         h('option', { value: '' }, '选择已有聊天…'),
         ...[...new Map(notificationChats.map((row) => [JSON.stringify([row.provider, row.chatId]), row])).entries()].map(([key, row]) =>
-          h('option', { key, value: key }, `${row.provider === 'weixin' ? '扫码机器人' : 'Pad / Bridge'} · ${row.label || row.chatId}`)))),
+          h('option', { key, value: key }, `${row.provider === 'weixin' ? '扫码机器人' : 'WechatPad'} · ${row.label || row.chatId}`)))),
       h('div', { className: 'wxp-grid' },
         h(Field, { label: '通知连接', hint: '请先在对应连接页启用并保存。' },
           h('select', { name: 'notificationProvider', value: values.notificationProvider ?? 'weixin',
             onChange: (event) => set('notificationProvider', event.target.value) },
           h('option', { value: 'weixin' }, '扫码机器人'),
-          h('option', { value: 'pad' }, 'WechatPad / Bridge'))),
+          h('option', { value: 'pad' }, 'WechatPad'))),
         h(Field, { label: '接收聊天 ID', hint: '与微信会话分组中的聊天 ID 一致。留空不发送；扫码机器人须先收到该微信发来的消息。' },
           h('input', { type: 'text', name: 'notificationChatId', value: values.notificationChatId ?? '',
             spellCheck: false, maxLength: 256, ...bindText(set, 'notificationChatId') }))),
@@ -1106,7 +1015,7 @@ export function WechatPadSettings({ t, connection, locale }) {
         onChange: (next) => set('notifyPermissionRequest', next) })));
 
   const accessPanel = () => h('div', { className: 'wxp-tabpanel', role: 'tabpanel', id: 'wxp-panel-access', 'aria-labelledby': 'wxp-tab-access' },
-    h('p', { className: 'wxp-hint' }, '仅用于 WechatPad / Bridge；扫码机器人不使用白名单。'),
+    h('p', { className: 'wxp-hint' }, '仅用于 WechatPad；扫码机器人不使用白名单。'),
     h('section', { className: 'wxp-card' },
       h('div', { className: 'wxp-cardHead' }, h('span', { className: 'wxp-cardTitle' }, t('access'))),
       h('div', { className: 'wxp-grid' },
@@ -1130,11 +1039,6 @@ export function WechatPadSettings({ t, connection, locale }) {
           h('textarea', { value: users, spellCheck: false, name: 'allowedUsers', onInput: (event) => setUsers(event.target.value), onChange: (event) => setUsers(event.target.value) })) : null,
         values.groupPolicy === 'allowlist' ? h(Field, { label: t('allowedGroups'), hint: t('allowedGroupsHint') },
           h('textarea', { value: groups, spellCheck: false, name: 'allowedGroups', onInput: (event) => setGroups(event.target.value), onChange: (event) => setGroups(event.target.value) })) : null,
-        h(Field, { label: t('selfWxid') },
-          h('input', {
-            type: 'text', value: values.selfWxid ?? '', spellCheck: false, name: 'selfWxid',
-            ...bindText(set, 'selfWxid'),
-          })),
         h(Field, { label: t('commandPrefix') },
           h('input', {
             type: 'text', value: values.commandPrefix ?? '/', name: 'commandPrefix',
@@ -1154,7 +1058,6 @@ export function WechatPadSettings({ t, connection, locale }) {
   const protocolPanel = (id) => h('div', { className: 'wxp-tabpanel', role: 'tabpanel', id: `wxp-panel-${id}`, 'aria-labelledby': `wxp-tab-${id}` },
     h('section', { className: 'wxp-card' },
       connectionHeader(id, id === 'pad' ? '启用 WechatPad' : '启用微信机器人'),
-      id === 'pad' ? providerField() : null,
       id === 'pad' ? padPanel() : weixinPanel()));
   const panels = { pad: () => protocolPanel('pad'), weixin: () => protocolPanel('weixin'), session: sessionPanel, access: accessPanel };
 

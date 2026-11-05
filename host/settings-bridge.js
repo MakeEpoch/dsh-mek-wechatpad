@@ -23,13 +23,12 @@ import { resolveConfig, resolveDefaults } from './config.js';
  * before switching to it.
  */
 const EDITABLE = new Set([
-  'enabled', 'provider', 'enabledProviders', 'baseUrl', 'key', 'apiPrefix', 'wxid', 'receiveMode', 'webhookHost', 'webhookPath',
-  'bridgeBaseUrl', 'bridgeToken', 'bridgeAccounts', 'bridgeClientId',
+  'enabled', 'provider', 'enabledProviders', 'baseUrl', 'token', 'wxid', 'clientId',
   'requestTimeoutSeconds', 'weixinAccountFile', 'weixinTyping', 'weixinReplyQuote', 'weixinBotType',
   'cwd', 'agentPreset', 'sessionTitlePrefix',
   'notificationProvider', 'notificationChatId', 'notifyTaskCompleted', 'notifyPermissionRequest',
   'maxReplyChunkLength', 'showProgress', 'messageMergeDelaySeconds', 'mergeReplies', 'chatOverrides', 'incomingMessageMode', 'dmPolicy', 'groupPolicy',
-  'allowedUsers', 'allowedGroups', 'groupRequireMention', 'selfWxid', 'selfNickname', 'commandPrefix',
+  'allowedUsers', 'allowedGroups', 'groupRequireMention', 'selfNickname', 'commandPrefix',
 ]);
 
 /** Whether the panel is allowed to write a field. Exported for the schema test. */
@@ -140,19 +139,17 @@ export function describeSettingsEntry(ctx) {
 export function panelReadModel(config) {
   // The panel is fed the already-normalized runtime config, whose fields are
   // plain values; `resolveConfig` has unwrapped every volatile reference.
-  // Both credentials are write-only: the page learns that one exists, never
+  // The credential is write-only: the page learns that it exists, never
   // what it is.
   // Ignore the removed legacy setting even if an old profile still contains it.
-  const { key, bridgeToken, persistBinding: _legacyBinding, ...rest } = config ?? {};
+  const { token, selfWxid: _derivedIdentity, ...rest } = resolveConfig(config);
   return {
     ...rest,
     // An old profile has no provider; the runtime default is `pad`, and the
     // panel decides which tab to open from this value, so never leave it off.
     provider: rest.provider === 'weixin' ? 'weixin' : 'pad',
-    key: undefined,
-    keyConfigured: Boolean(key),
-    bridgeToken: undefined,
-    bridgeTokenConfigured: Boolean(bridgeToken),
+    token: undefined,
+    tokenConfigured: Boolean(token),
   };
 }
 
@@ -189,7 +186,7 @@ export async function savePanelSettings({ ctx, patch, expectedRevision }) {
     if (!EDITABLE.has(field)) continue;
     // An empty or blank secret means "leave the stored one alone" — the form
     // never echoes it back, so a blank box is not a request to clear it.
-    if (['key', 'bridgeToken'].includes(field) && (value === undefined || value === null || !String(value).trim())) continue;
+    if (field === 'token' && (value === undefined || value === null || !String(value).trim())) continue;
     clean[field] = value;
   }
   if (Object.keys(clean).length === 0) throw new TypeError('没有可保存的字段');

@@ -30,7 +30,7 @@ async function fixture(t, settings = {}) {
   const connections = {};
   const values = { fail: false };
   const config = {
-    key: 'test',
+    token: 'test', wxid: 'bot',
     provider: 'pad',
     enabledProviders: ['pad', 'weixin'],
     dmPolicy: 'open',

@@ -159,14 +159,14 @@ test('selection: provider defaults to pad for a legacy profile', async () => {
   assert.equal(resolveProvider({ provider: ' WEIXIN ' }), 'weixin');
   assert.equal(resolveProvider(undefined), 'pad');
 
-  const connection = await createConnection(resolveConfig({ baseUrl: 'http://127.0.0.1:8059', key: 'k' }));
+  const connection = await createConnection(resolveConfig({ baseUrl: 'http://127.0.0.1:8059', token: 'k', wxid: 'bot' }));
   assert.equal(connection.id, 'pad');
   assert.equal(connection.label, 'WechatPad');
   assert.equal(isConnection(connection), true);
 });
 
 test('selection: pad adapter declares the pad capabilities and fixed protocol facts', async () => {
-  const connection = await createConnection(resolveConfig({ receiveMode: 'webhook', key: 'k' }));
+  const connection = await createConnection(resolveConfig({ receiveMode: 'webhook', token: 'k', wxid: 'bot' }));
   assert.deepEqual(connection.capabilities, { ...DEFAULT_CAPABILITIES, media: true });
   // The Pad cannot show typing, cannot bind by QR, and reports "unsupported".
   assert.equal(await connection.typing('wxid_a', true), false);
@@ -317,7 +317,7 @@ async function serviceWith(t, connection, config = {}) {
     ctx,
     config: {
       baseUrl: 'http://127.0.0.1:8059',
-      key: 'test-key',
+      token: 'test-key', wxid: 'bot',
       receiveMode: 'websocket',
       dmPolicy: 'open',
       groupPolicy: 'disabled',
@@ -351,11 +351,11 @@ test('service: a message flows receive -> prompt -> model reply -> send', async 
   assert.deepEqual(status.capabilities, {
     typing: true, media: false, groupMention: false, nativeReply: false,
   });
-  // Legacy Pad-shaped fields stay present for an older panel build.
-  assert.equal(status.receiveMode, 'websocket');
+  // iLink does not expose a Pad receive mode or callback.
+  assert.equal(status.receiveMode, undefined);
   assert.equal(status.baseUrl, 'http://127.0.0.1:8059');
-  assert.equal(typeof status.webhookUrl, 'string');
-  assert.equal(status.keyConfigured, true);
+  assert.equal(status.webhookUrl, undefined);
+  assert.equal(status.tokenConfigured, true);
   assert.equal(status.phase, 'connected');
   // The adapter's own status is forwarded verbatim so a protocol-specific field
   // (a bound bot id, a QR state) reaches the panel.
@@ -517,7 +517,7 @@ test('coexistence: both protocols receive the same chat/message id without shari
   const { ctx, prompts } = fakeCtx();
   const connections = { pad: fakeConnection(), weixin: fakeConnection({ id: 'weixin' }) };
   const service = new WechatPadService({ ctx, config: {
-    provider: 'pad', enabledProviders: ['pad', 'weixin'], key: 'fake-key', dmPolicy: 'open', showProgress: false,
+    provider: 'pad', enabledProviders: ['pad', 'weixin'], token: 'fake-key', wxid: 'bot', dmPolicy: 'open', showProgress: false,
   }, createConnection: async (config) => connections[config.provider] });
   t.after(() => service.dispose());
   await service.start();
@@ -557,7 +557,7 @@ test('coexistence: legacy configs keep their channel, an explicit empty list clo
 test('live settings: enabling and disabling iLink applies without plugin remount or Pad reconnect', async (t) => {
   const { WechatPadService } = await import('../host/wechatpad-service.js');
   const { ctx } = fakeCtx();
-  const config = { provider: 'pad', enabledProviders: ['pad'], key: 'test-key' };
+  const config = { provider: 'pad', enabledProviders: ['pad'], token: 'test-key', wxid: 'bot' };
   const settings = {
     describe: () => [{ ns: 'wechatpad', revision: 1, value: {} }],
     update: async (_ns, patch) => { Object.assign(config, patch); },
@@ -596,7 +596,7 @@ test('access isolation: QR bot accepts a peer that Pad whitelist rejects', async
   const { ctx, prompts } = fakeCtx();
   const connections = { pad: fakeConnection(), weixin: fakeConnection({ id: 'weixin' }) };
   const service = new WechatPadService({ ctx, config: {
-    enabledProviders: ['pad', 'weixin'], key: 'test-key', dmPolicy: 'allowlist',
+    enabledProviders: ['pad', 'weixin'], token: 'test-key', wxid: 'bot', dmPolicy: 'allowlist',
     allowedUsers: ['only-pad-member'], selfWxid: 'pad-identity', showProgress: false,
   }, createConnection: async (config) => connections[config.provider] });
   t.after(() => service.dispose()); await service.start();

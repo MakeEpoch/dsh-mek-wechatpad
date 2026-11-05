@@ -13,12 +13,11 @@
  */
 import z from '@deepseek-ai/schemastery';
 
-export const RECEIVE_MODES = ['websocket', 'webhook', 'bridge'];
 export const DM_POLICIES = ['open', 'allowlist', 'disabled'];
 export const GROUP_POLICIES = ['open', 'allowlist', 'disabled'];
 /**
  * How WeChat reaches dsh.
- *  - `pad`: WechatPad, either direct (Pad API + key) or through WeChat Bridge.
+ *  - `pad`: WechatPad with a WS subscription to wechatReal08.
  *  - `weixin`: the Tencent iLink bot bound by scanning a QR code; no Pad at all.
  * The list is the schema's union and the normalizer's fallback table in one
  * place, so an unknown value written by an older profile lands on `pad` — the
@@ -47,7 +46,7 @@ export const Config = z.object({
   provider: z
     .union([z.const('pad'), z.const('weixin')])
     .default(DEFAULT_PROVIDER)
-    .description('微信接入方式。WechatPad：直连 Pad / WeChat Bridge；微信机器人：扫码绑定腾讯 iLink 机器人，无需 Pad。')
+    .description('微信接入方式。WechatPad：连接 wechatReal08；微信机器人：扫码绑定腾讯 iLink 机器人，无需 Pad。')
     .role('volatile').extra('volatile', true),
 
   enabledProviders: z.array(z.union([z.const('pad'), z.const('weixin')])).default(undefined)
@@ -55,64 +54,16 @@ export const Config = z.object({
     .role('volatile').extra('volatile', true),
 
   // ── 连接 ────────────────────────────────────────────────────────────────
-  baseUrl: z
-    .string()
-    .default('http://127.0.0.1:8059')
-    .description('直连 WechatPad 的服务地址，例如 http://127.0.0.1:8059。Bridge 接入请填写 bridgeBaseUrl。')
+  baseUrl: z.string().default('http://127.0.0.1:8062')
+    .description('WechatPad 服务地址，例如 http://127.0.0.1:8062。')
     .role('volatile').extra('volatile', true),
-  // A secret is marked with `role('secret')`; its serialized meta is widened to
-  // add the `volatile` flag below, because `role()` overwrites instead of merging.
-  // A secret carries `role('secret')` for redaction; its serialized meta also
-  // gains `volatile` from the same toJSON widening as every other field.
-  key: z
-    .string()
-    .role('secret')
-    .extra('volatile', true)
-    .description('直连 WechatPad 的 key。Bridge 接入由 Bridge 注入账号凭证，无需填写此项。写入后设置页不再回显。'),
-  apiPrefix: z
-    .string()
-    .default('')
-    .description('兼容旧版代理配置的接口前缀。新配置保持留空；Bridge 接入使用 receiveMode=bridge。')
+  token: z.string().role('secret').extra('volatile', true)
+    .description('服务端访问 Token（WECHAT_BRIDGE_TOKEN），只写不读。'),
+  wxid: z.string().default('')
+    .description('已登录机器人的 wxid；一个连接对应一个微信账号。')
     .role('volatile').extra('volatile', true),
-  wxid: z
-    .string()
-    .default('')
-    .description('兼容旧版配置的机器人 wxid；新 Bridge 配置使用 bridgeAccounts。')
-    .role('volatile').extra('volatile', true),
-  receiveMode: z
-    .union([z.const('websocket'), z.const('webhook'), z.const('bridge')])
-    .default('websocket')
-    .description('websocket：直连 WechatPad 的 /ws/GetSyncMsg；webhook：WechatPad 回调到本机端口；bridge：订阅 WeChat Bridge 的 /ws/outbound（与 webhook 分发并行，不影响其他消费者）。')
-    .role('volatile').extra('volatile', true),
-  webhookHost: z
-    .string()
-    .default('127.0.0.1')
-    .description('webhook 模式监听地址。')
-    .role('volatile').extra('volatile', true),
-  bridgeBaseUrl: z
-    .string()
-    .default('')
-    .description('wechatReal08 内置 Bridge 地址，例如 http://127.0.0.1:8062；Bridge 接入时必填。')
-    .role('volatile').extra('volatile', true),
-  bridgeToken: z
-    .string()
-    .role('secret')
-    .extra('volatile', true)
-    .description('wechatReal08 的 WECHAT_BRIDGE_TOKEN；订阅和 API 共用，只写不读。'),
-  bridgeAccounts: z
-    .string()
-    .default('')
-    .description('Bridge 订阅的 wxid 列表（逗号分隔）；留空则使用上面的机器人 wxid。')
-    .role('volatile').extra('volatile', true),
-  bridgeClientId: z
-    .string()
-    .default('dsh')
-    .description('Bridge 客户端身份；同一 Bridge 上每个消费者用不同值，避免互相顶掉。')
-    .role('volatile').extra('volatile', true),
-  webhookPath: z
-    .string()
-    .default('/wechatpad/callback')
-    .description('webhook 模式回调路径。')
+  clientId: z.string().default('dsh')
+    .description('WS 客户端标识；同一服务的每个消费者使用不同值。')
     .role('volatile').extra('volatile', true),
   requestTimeoutSeconds: z
     .number()
@@ -129,7 +80,7 @@ export const Config = z.object({
   //
   // The iLink access token is deliberately NOT a config field: it is obtained
   // by scanning, written by the Host to the account file below, and never
-  // crosses the settings RPC. Only `key` and `bridgeToken` stay secrets.
+  // crosses the settings RPC. Only `token` is a settings secret.
   weixinAccountFile: z
     .string()
     .default('')
@@ -233,12 +184,7 @@ export const Config = z.object({
   selfNickname: z
     .string()
     .default('')
-    .description('机器人在群里的昵称。群里 @ 的是昵称而不是 wxid，留空则自动从 Bridge 查询。')
-    .role('volatile').extra('volatile', true),
-  selfWxid: z
-    .string()
-    .default('')
-    .description('机器人自己的 wxid，用于忽略自己发出的消息回声；留空自动识别。')
+    .description('机器人在群里的昵称。群里 @ 的是昵称而不是 wxid，留空则自动从服务端查询。')
     .role('volatile').extra('volatile', true),
   commandPrefix: z
     .string()
@@ -269,8 +215,8 @@ Object.defineProperty(Config, 'toJSON', {
     const json = serialize();
     const refs = json?.refs ?? {};
     const root = refs[json?.uid];
-    const keyId = root?.dict?.key;
-    const node = keyId === undefined ? undefined : refs[keyId];
+    const tokenId = root?.dict?.token;
+    const node = tokenId === undefined ? undefined : refs[tokenId];
     if (node && node.meta) node.meta = { ...node.meta, role: 'secret', volatile: true };
     return json;
   },
@@ -280,14 +226,14 @@ Object.defineProperty(Config, 'toJSON', {
 });
 
 /** Fields whose value must never be echoed back to a browser. */
-export const SECRET_FIELDS = Object.freeze(['key']);
+export const SECRET_FIELDS = Object.freeze(['token']);
 
 /**
  * Read one field out of a parsed Config.
  *
  * A `volatile` field arrives as a live reference that dsh updates in place when
  * a setting is written; a plain field arrives as its value. Reading both the
- * same way is what makes a settings change actually reach the running bridge.
+ * same way is what makes a settings change actually reach the running connection.
  * @param {Record<string, unknown>} value parsed Config.
  * @param {string} field field name.
  */
@@ -315,17 +261,10 @@ export function resolveConfig(raw) {
     // behaviour rather than leaving the runtime with no adapter at all.
     provider: PROVIDERS.includes(field('provider')) ? field('provider') : DEFAULT_PROVIDER,
     enabledProviders: Array.isArray(field('enabledProviders')) ? [...new Set(field('enabledProviders').filter((id) => PROVIDERS.includes(id)))] : [PROVIDERS.includes(field('provider')) ? field('provider') : DEFAULT_PROVIDER],
-    baseUrl: trimmedBase || 'http://127.0.0.1:8059',
-    key: String(field('key') ?? '').trim(),
-    apiPrefix: normalizePrefix(field('apiPrefix')),
+    baseUrl: trimmedBase || 'http://127.0.0.1:8062',
+    token: String(field('token') ?? '').trim(),
     wxid: String(field('wxid') ?? '').trim(),
-    receiveMode: RECEIVE_MODES.includes(field('receiveMode')) ? field('receiveMode') : 'websocket',
-    bridgeBaseUrl: String(field('bridgeBaseUrl') ?? '').trim().replace(/\/+$/, ''),
-    bridgeToken: String(field('bridgeToken') ?? '').trim(),
-    bridgeAccounts: String(field('bridgeAccounts') ?? '').trim(),
-    bridgeClientId: String(field('bridgeClientId') ?? '').trim() || 'dsh',
-    webhookHost: String(field('webhookHost') ?? '127.0.0.1').trim() || '127.0.0.1',
-    webhookPath: ensureLeadingSlash(String(field('webhookPath') ?? '/wechatpad/callback').trim()),
+    clientId: String(field('clientId') ?? '').trim() || 'dsh',
     requestTimeoutSeconds: clampNumber(field('requestTimeoutSeconds'), 5, 120, 20),
     // iLink bot: a directory hint only (empty = the Host picks the default
     // under ~/.dsh), two behaviour switches read optimistically as `!== false`,
@@ -353,7 +292,7 @@ export function resolveConfig(raw) {
     allowedGroups: strings(field('allowedGroups')),
     groupRequireMention: field('groupRequireMention') !== false,
     selfNickname: String(field('selfNickname') ?? '').trim(),
-    selfWxid: String(field('selfWxid') ?? '').trim(),
+    selfWxid: String(field('wxid') ?? '').trim(),
     commandPrefix: String(field('commandPrefix') ?? '/').trim() || '/',
   };
 }
@@ -442,57 +381,14 @@ export function chatSettingsFor(config, provider, chatId) {
   return settings;
 }
 
-function normalizePrefix(input) {
-  const raw = String(input ?? '').trim().replace(/\/+$/, '');
-  if (!raw) return '';
-  return raw.startsWith('/') ? raw : `/${raw}`;
-}
-
-function ensureLeadingSlash(input) {
-  if (!input) return '/';
-  return input.startsWith('/') ? input : `/${input}`;
-}
-
 function clampNumber(input, min, max, fallback) {
   const value = Number(input);
   if (!Number.isFinite(value)) return fallback;
   return Math.min(max, Math.max(min, value));
 }
 
-/**
- * Resolve how OUTBOUND calls reach WechatPad for a given configuration.
- *
- * WeChat Bridge proxies every Pad endpoint under `/proxy/{wxid}/...` and injects
- * the account's own `auth_key`, so bridge mode needs no Pad address and no key:
- * one Bridge origin plus the bot wxid is enough. Direct mode uses the Pad
- * origin and its key.
- * @param {ReturnType<typeof resolveConfig>} config
- * @returns {{ baseUrl: string, key: string, apiPrefix: string, wxid: string, configured: boolean }}
- */
+/** Resolve the single WechatPad connection used for HTTP sends and WS receives. */
 export function outboundTarget(config) {
-  if (config.receiveMode === 'bridge') {
-    const baseUrl = config.bridgeBaseUrl;
-    const wxid = config.wxid || firstAccount(config.bridgeAccounts);
-    return {
-      baseUrl,
-      bridgeToken: config.bridgeToken,
-      // The Bridge fills in the auth_key; sending carries no separate credential.
-      key: '',
-      apiPrefix: '/proxy',
-      wxid,
-      configured: Boolean(baseUrl && wxid),
-    };
-  }
-  return {
-    baseUrl: config.baseUrl,
-    key: config.key,
-    apiPrefix: config.apiPrefix,
-    wxid: config.wxid,
-    configured: Boolean(config.baseUrl && config.key && (!config.apiPrefix || config.wxid)),
-  };
-}
-
-/** First entry of a comma/space separated account list. */
-export function firstAccount(raw) {
-  return String(raw ?? '').split(/[,，\s]+/).map((part) => part.trim()).filter(Boolean)[0] ?? '';
+  const { baseUrl, token, wxid } = config;
+  return { baseUrl, token, wxid, configured: Boolean(baseUrl && token && wxid) };
 }

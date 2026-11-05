@@ -95,10 +95,10 @@ async function fixture(t, { legacyFile, groupConfig = {} } = {}) {
     },
   };
   const config = {
-    receiveMode: 'bridge',
-    bridgeBaseUrl: `http://127.0.0.1:${server.address().port}`,
-    bridgeToken: 'test',
-    bridgeAccounts: 'bot',
+
+    baseUrl: `http://127.0.0.1:${server.address().port}`,
+    token: 'test',
+    wxid: 'bot',
     selfWxid: 'bot',
     dmPolicy: 'open',
     showProgress: false,

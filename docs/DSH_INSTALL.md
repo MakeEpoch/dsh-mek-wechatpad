@@ -69,9 +69,9 @@ dsh plugin --profile web remove dsh-mek-wechatpad --ignore-scripts
 | 现象 | 检查 |
 | --- | --- |
 | 设置里没有「微信」 | `dsh.profile.bundles` 是否含 `dsh-mek-wechatpad`；是否重启并刷新 |
-| 状态「未配置」 | Key 没保存成功，或保存后 Loader 报错（看 dsh 启动日志） |
+| 状态「未配置」 | 服务地址、访问 Token 或机器人 wxid 未配置，或保存后 Loader 报错（看 dsh 启动日志） |
 | 状态「出错」 | 先点测试连接；确认 Pad 可从 dsh 进程访问（同一台机器/同一网段） |
 | 发消息没反应 | 私聊是否在白名单；群聊策略默认忽略；群里是否 @ 了机器人 |
-| 收不到推送 | 用 `curl "<pad>/login/GetLoginStatus?key=..."` 看 Pad 是否在线；webhook 模式看 Pad 的 `/message/GetCallback` |
+| 收不到推送 | 在设置页检测连接；确认微信已在 wechatReal08 登录、WS 订阅的 wxid 正确且客户端标识不冲突 |
 
 日志前缀为 `[wechatpad]`，在 dsh 的日志里查看。

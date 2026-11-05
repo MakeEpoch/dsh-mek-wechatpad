@@ -2,7 +2,7 @@
 
 ## 参考实现
 
-- Pad / Bridge：本机原项目 `hermes-plugin-wechatpad/wechatpad/inbound.py`、`outbound.py`、`audio.py`，以及 WechatPad Swagger。沿用 GetMsgBigImg 分块、GetMsgVoice、SendImageNewMessage 和 SendVoice 形状；文件按当前部署 Swagger 与本地 wehub_util.py 的 UploadAppAttach → SendAppMessage 流程发送；Bridge 使用原有 `/proxy/{wxid}` 代理，不发送直连 key。
+- WechatPad：本机原项目 `hermes-plugin-wechatpad/wechatpad/inbound.py`、`outbound.py`、`audio.py`，以及 WechatPad Swagger。沿用 GetMsgBigImg 分块、GetMsgVoice、SendImageNewMessage 和 SendVoice 形状；文件按当前部署 Swagger 与本地 wehub_util.py 的 UploadAppAttach → SendAppMessage 流程发送；API 固定使用 `/proxy/{wxid}` 和服务 Token。
 - 扫码：安装的 `@xmanrui/dsh-im@5.1.0` 的 `src/channels/weixin/weixin-api.mjs`、`weixin-bridge.mjs`。沿用 iLink AES-128-ECB CDN 上传下载及图片／文件消息。
 - 文件回传：改编 dsh-im `src/channels/shared/semantic/artifact.mjs` 的工具快照和按请求／轮次归属的投递登记，保留 [MIT 许可](../host/vendor/DSH-IM-LICENSE)。使用插件专属工具名和登记表，避免与原 IM 插件串用。
 - SILK：[silk-wasm 官方实现](https://github.com/idranme/silk-wasm)，运行时依赖固定在 lockfile。识别 WAV 使用 16 kHz、单声道、16 位；发送 SILK 使用 24 kHz。
@@ -28,7 +28,7 @@
 
 ## 验证
 
-`tests/media.test.mjs` 覆盖 CDN 解密、原图分块、语音真实 SILK 编解码、识别服务接线、附件合并、图片独立消息、按聊天回复凭证、Pad/Bridge HTTP 报文、iLink 加密上传、文件快照和图片入队回退。
+`tests/media.test.mjs` 覆盖 CDN 解密、原图分块、语音真实 SILK 编解码、识别服务接线、附件合并、图片独立消息、按聊天回复凭证、WechatPad HTTP 报文、iLink 加密上传、文件快照和图片入队回退。
 
 `tests/scheduled-delivery.test.mjs` 另外覆盖两路原生 `present` 的多图片／文件交付、不可变快照、失败调用／父工具不发送，以及网页轮次不向微信转发。
 

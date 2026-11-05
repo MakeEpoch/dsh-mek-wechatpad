@@ -9,12 +9,11 @@
  *  - `ctx.effect` gives the runtime one teardown path for every exit — disable,
  *    config edit, or dsh shutdown.
  *
- * The host needs no HTTP port of its own: `ctx.webServer` routes and
- * `ctx.connection` carry both the WeChat side and the Settings panel.
+ * The host needs no HTTP port of its own: `ctx.connection` carries the Settings panel, and the Host connects to WechatPad.
  */
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths';
-import { Config, resolveConfig } from './config.js';
+import { Config, outboundTarget, resolveConfig } from './config.js';
 import { registerManagementRpc } from './management-rpc.js';
 import {
   describeSettingsEntry, panelReadModel, persistedFormValue, resetPanelSettings, savePanelSettings,
@@ -26,17 +25,17 @@ export const name = 'dsh-wechatpad';
 
 /**
  * Services the Host half needs before it may start. `connection` provides the
- * owner Peer and the RPC carrier; `webServer` hosts the push/webhook routes;
+ * owner Peer and the RPC carrier;
  * `typertGateway` is the in-process Remote transport into the Session domain.
  * `settings` and `configEditor` stay optional (`ctx.get`), so a minimal
  * composition still runs with the settings page degraded.
  */
-export const inject = ['connection', 'webServer', 'typertGateway'];
+export const inject = ['connection', 'typertGateway'];
 
 export { Config };
 
 /**
- * Mount the WeChat bridge.
+ * Mount the WeChat connections.
  * @param {import('@deepseek-ai/cordis').Context} ctx plugin Context.
  * @param {Record<string, unknown>} raw parsed Config.
  */
@@ -58,7 +57,7 @@ export function apply(ctx, raw) {
       await service.start();
     };
     // A failed start must not take the plugin (and its settings page) down: the
-    // panel is how a user fixes a wrong key or address.
+    // panel is how a user fixes a wrong token or address.
     start().catch((error) => logger('error', `启动失败：${error?.message ?? error}`));
 
     // The settings page answers even when WeChat cannot connect — that is
@@ -75,7 +74,7 @@ export function apply(ctx, raw) {
       await service?.dispose();
       service = null;
     };
-  }, 'wechatpad: WeChat bridge');
+  }, 'wechatpad: WeChat connections');
 }
 
 /**
@@ -101,13 +100,12 @@ class PanelFacade {
       label: this.#config.enabled ? '启动中' : '已关闭',
       since: Date.now(),
       lastError: '',
-      receiveMode: this.#config.receiveMode,
+      receiveMode: this.#config.provider === 'pad' ? 'websocket' : undefined,
       baseUrl: this.#config.baseUrl,
       messagesIn: 0,
       messagesOut: 0,
-      webhookUrl: '',
       connected: false,
-      keyConfigured: Boolean(this.#config.key),
+      tokenConfigured: Boolean(this.#config.token),
     };
   }
 
@@ -148,12 +146,11 @@ class PanelFacade {
   async testConnection(provider) {
     const service = this.#getService();
     if (service) return service.testConnection(provider);
-    if (!this.#config.key) return { ok: false, error: '尚未填写 key', detail: '请先填写 WechatPad key' };
+    if (!outboundTarget(this.#config).configured) return { ok: false, error: '配置不完整', detail: '请填写服务地址、访问 Token 和机器人 wxid' };
     const { WechatPadClient } = await import('./pad-api.js');
     const client = new WechatPadClient({
       baseUrl: this.#config.baseUrl,
-      key: this.#config.key,
-      apiPrefix: this.#config.apiPrefix,
+      token: this.#config.token,
       wxid: this.#config.wxid,
       timeoutMs: 15_000,
     });
@@ -161,9 +158,8 @@ class PanelFacade {
     return {
       ok: result.ok,
       error: result.error,
-      detail: result.ok ? 'WechatPad 可访问，key 有效' : 'WechatPad 不可访问或 key 无效',
-      receiveMode: this.#config.receiveMode,
-      webhookUrl: '',
+      detail: result.ok ? 'WechatPad 可访问，账号已登录' : 'WechatPad 不可访问或账号未登录',
+      receiveMode: this.#config.provider === 'pad' ? 'websocket' : undefined,
     };
   }
 

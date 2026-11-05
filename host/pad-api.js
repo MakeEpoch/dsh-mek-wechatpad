@@ -1,9 +1,9 @@
 /**
  * WechatPad HTTP client.
  *
+ * wechatReal08 exposes Pad endpoints under `/proxy/{wxid}/...`.
  * WechatPad answers every endpoint with `{ Code, Success, Data, Message }`
- * where `Data` nests the real payload. WeChat Bridge exposes the same
- * endpoints under `/proxy/{wxid}/...` and wraps them in `{ ok, ... }`.
+ * where `Data` nests the real payload; gateway errors may use `{ ok, ... }`.
  * Both shapes are unwrapped here so callers only see `{ ok, data, error }`.
  */
 import { extname } from 'node:path';
@@ -23,9 +23,7 @@ export const SEND_CHUNK_DELAY_MS = 1100;
 
 export class WechatPadClient {
   #baseUrl;
-  #key;
-  #bridgeToken;
-  #apiPrefix;
+  #token;
   #wxid;
   #timeoutMs;
   #logger;
@@ -33,34 +31,27 @@ export class WechatPadClient {
   /**
    * @param {object} options client options.
    * @param {string} options.baseUrl service origin without a trailing slash.
-   * @param {string} [options.key] WechatPad `key`; Bridge injects its own account key.
-   * @param {string} [options.apiPrefix] '' for direct Pad, '/proxy' for Bridge.
-   * @param {string} [options.wxid] bot wxid, required when apiPrefix is /proxy.
+   * @param {string} options.token service access token.
+   * @param {string} options.wxid logged-in bot wxid.
    * @param {number} [options.timeoutMs] per-request timeout.
    * @param {(level: string, msg: string, extra?: unknown) => void} [options.logger]
    */
-  constructor({ baseUrl, key, bridgeToken = '', apiPrefix = '', wxid = '', timeoutMs = 20000, logger = () => {} }) {
+  constructor({ baseUrl, token = '', wxid = '', timeoutMs = 20000, logger = () => {} }) {
     this.#baseUrl = String(baseUrl ?? '').replace(/\/+$/, '');
-    this.#key = String(key ?? '').trim();
-    this.#bridgeToken = String(bridgeToken).trim();
-    this.#apiPrefix = String(apiPrefix ?? '').trim();
+    this.#token = String(token).trim();
     this.#wxid = String(wxid ?? '').trim();
     this.#timeoutMs = timeoutMs;
     this.#logger = logger;
   }
 
   get configured() {
-    if (!this.#baseUrl) return false;
-    return this.#apiPrefix ? Boolean(this.#wxid) : Boolean(this.#key);
+    return Boolean(this.#baseUrl && this.#token && this.#wxid);
   }
 
-  /** Absolute URL of one Pad endpoint, honouring the Bridge proxy prefix. */
+  /** Absolute URL of one Pad endpoint, scoped to the configured account. */
   url(path) {
     const endpoint = path.startsWith('/') ? path : `/${path}`;
-    const prefix = this.#apiPrefix && this.#wxid
-      ? `${this.#apiPrefix.replace(/\/+$/, '')}/${encodeURIComponent(this.#wxid)}`
-      : this.#apiPrefix;
-    return `${this.#baseUrl}${prefix}${endpoint}`;
+    return `${this.#baseUrl}/proxy/${encodeURIComponent(this.#wxid)}${endpoint}`;
   }
 
   /**
@@ -73,7 +64,7 @@ export class WechatPadClient {
    */
   async request(method, path, payload, options = {}) {
     if (!this.configured) {
-      return { ok: false, data: null, error: '未配置 WechatPad 地址或 key' };
+      return { ok: false, data: null, error: '未配置 WechatPad 地址、访问 Token 或机器人 wxid' };
     }
     const retries = Number.isInteger(options.retries) ? options.retries : SEND_RETRY_DELAYS.length;
     let attempt = 0;
@@ -133,40 +124,19 @@ export class WechatPadClient {
     return result;
   }
 
-  /** Configure (or clear) the Pad's own HTTP message callback. */
-  async setCallback(callbackUrl, enabled) {
-    return this.request('POST', '/message/SetCallback', {
-      CallbackURL: callbackUrl ?? '',
-      Enabled: Boolean(enabled),
-    }, { retries: 0 });
-  }
-
-  /** Read the currently configured callback, if the deployment exposes it. */
-  async getCallback() {
-    return this.request('GET', '/message/GetCallback', undefined, { retries: 0 });
-  }
-
-  /** The HTTP polling alternative to the WebSocket push. */
-  async syncMessages(count = 0) {
-    return this.request('POST', '/message/HttpSyncMsg', { Count: count }, { retries: 0 });
-  }
-
   async #attempt(method, path, payload, signal, timeoutMs = this.#timeoutMs) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(new Error('WechatPad request timed out')), timeoutMs);
     const composite = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
     const url = this.url(path);
     const query = new URL(url);
-    // Bridge only injects the account's auth_key when no key was supplied.
-    // A placeholder (or a stale direct-Pad key) overrides it and rejects sends.
-    if (!this.#apiPrefix) query.searchParams.set('key', this.#key);
     try {
       const response = await fetch(query, {
         method,
         headers: {
           accept: 'application/json',
           ...(payload === undefined ? {} : { 'content-type': 'application/json' }),
-          ...(this.#apiPrefix && this.#bridgeToken ? { 'X-Bridge-Token': this.#bridgeToken } : {}),
+          'X-Bridge-Token': this.#token,
         },
         body: payload === undefined ? undefined : JSON.stringify(payload),
         signal: composite,
@@ -199,7 +169,7 @@ function fileAppMessageXml(name, size, mediaId) {
 }
 
 /**
- * Normalize a WechatPad or Bridge JSON envelope.
+ * Normalize a WechatPad JSON envelope.
  * @param {unknown} parsed decoded JSON body.
  * @returns {{ ok: boolean, data: unknown, error?: string }}
  */
@@ -209,7 +179,7 @@ export function normalizeEnvelope(parsed) {
   }
   const envelope = /** @type {Record<string, any>} */ (parsed);
   if (envelope.ok === false) {
-    return { ok: false, data: envelope, error: String(envelope.error ?? envelope.detail ?? 'Bridge 返回失败') };
+    return { ok: false, data: envelope, error: String(envelope.error ?? envelope.detail ?? 'WechatPad 返回失败') };
   }
   // Match Hermes: nested send receipts are authoritative, including failures
   // inside a Code=200 envelope. Scan all entries so success cannot mask failure.

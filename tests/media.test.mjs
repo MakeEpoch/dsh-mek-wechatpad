@@ -430,7 +430,7 @@ test('image fallback retries only explicit pre-admission image rejection and kee
   assert.match(calls[1].args.request.content[0].text, /原图已保存/);
 });
 
-test('Pad and Bridge send real HTTP image/voice/file shapes, route credentials and do not retry uncertain uploads', async (t) => {
+test('Pad sends real HTTP image/voice/file shapes, route credentials and do not retry uncertain uploads', async (t) => {
   const calls = [];
   let mode = 'normal';
   const server = createServer(async (request, response) => {
@@ -438,7 +438,7 @@ test('Pad and Bridge send real HTTP image/voice/file shapes, route credentials a
     for await (const chunk of request) chunks.push(chunk);
     calls.push({
       url: new URL(request.url, 'http://localhost'),
-      body: JSON.parse(Buffer.concat(chunks)),
+      body: JSON.parse(Buffer.concat(chunks)), token: request.headers['x-bridge-token'],
     });
     const call = calls.at(-1);
     const upload = call.url.pathname.endsWith('/other/UploadAppAttach');
@@ -463,12 +463,11 @@ test('Pad and Bridge send real HTTP image/voice/file shapes, route credentials a
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   t.after(() => server.close());
   const baseUrl = `http://127.0.0.1:${server.address().port}`;
-  for (const bridge of [false, true]) {
+  {
     mode = 'normal';
     const client = new WechatPadClient({
       baseUrl,
-      key: 'private-pad-key',
-      ...(bridge ? { apiPrefix: '/proxy', wxid: 'bot' } : {}),
+      token: 'private-service-token', wxid: 'bot',
     });
     assert.equal(
       (await client.sendImage('peer', PNG.toString('base64'))).ok,
@@ -495,11 +494,11 @@ test('Pad and Bridge send real HTTP image/voice/file shapes, route credentials a
     const [image, voice, upload, file] = calls.slice(-4);
     assert.equal(
       image.url.pathname,
-      `${bridge ? '/proxy/bot' : ''}/message/SendImageNewMessage`,
+      `/proxy/bot/message/SendImageNewMessage`,
     );
     assert.equal(
       image.url.searchParams.get('key'),
-      bridge ? null : 'private-pad-key',
+      null,
     );
     assert.deepEqual(
       Buffer.from(image.body.MsgItem[0].ImageContent, 'base64'),
@@ -507,9 +506,9 @@ test('Pad and Bridge send real HTTP image/voice/file shapes, route credentials a
     );
     assert.equal(voice.body.VoiceFormat, 4);
     assert.equal(voice.body.VoiceSecond, 2);
-    assert.equal(upload.url.pathname, `${bridge ? '/proxy/bot' : ''}/other/UploadAppAttach`);
-    assert.equal(file.url.pathname, `${bridge ? '/proxy/bot' : ''}/message/SendAppMessage`);
-    assert.ok([image, voice, upload, file].every(x => x.url.searchParams.get('key') === (bridge ? null : 'private-pad-key')));
+    assert.equal(upload.url.pathname, `/proxy/bot/other/UploadAppAttach`);
+    assert.equal(file.url.pathname, `/proxy/bot/message/SendAppMessage`);
+    assert.ok([image, voice, upload, file].every(x => x.url.searchParams.get('key') === null && x.token === 'private-service-token'));
     assert.equal(
       Buffer.from(upload.body.fileData, 'base64').toString(),
       'report',

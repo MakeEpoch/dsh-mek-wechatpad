@@ -10,9 +10,9 @@
 | `gateway`（Hermes 自己的网关进程） | dsh 自身进程；通过 `ctx.typertGateway` 驱动会话 |
 | `BasePlatformAdapter` / `MessageEvent` | `session/prompt` + 全局 `session/event` 回复监听；`session/follow` 只读取历史 |
 | `settings.dm_policy` 等 PascalCase 环境变量 | Config 字段（camelCase），网页设置面板编辑 |
-| `WECHATPAD_KEY`（环境变量，明文） | 直连模式使用只写不读的 `key` 字段；Bridge 代理不传 key，由 Bridge 注入账号密钥 |
+| `WECHATPAD_KEY`（环境变量，明文） | 只写不读的 `token` 字段；服务端按 wxid 使用账号密钥 |
 | `config.py` + `deps.py` 动态导入 aiohttp/httpx/pilk | 使用 dsh 运行时的 `fetch`、`node:http`、`ws`，二维码依赖 qrcode，SILK 依赖 silk-wasm |
-| `transport.py` WebSocket/webhook/bridge 三选一 | `receiveMode`：`websocket`（经 dsh 同源路由）或 `webhook`（dsh 路由 + Pad 回调登记） |
+| `transport.py` WebSocket/webhook/bridge 三选一 | 固定订阅 wechatReal08 的 `/ws/outbound`，不注册 HTTP 回调 |
 | `inbound.py` 解析 + 媒体下载 | `inbound.js` 解析 + `pad-media.js` 惰性下载 + `media.js` 会话附件 |
 | `outbound.py` 分段发送 + 发送节流 | `outbound.js`：按会话队列串行 + 1.1s 秒级间隔 |
 | `ref_index.py` 引用/批次/去重索引 | `transport.js` 的 `DedupeWindow`；引用索引未实现 |
@@ -22,17 +22,15 @@
 
 | 用途 | WechatPad 端点 | 本项目调用处 |
 | --- | --- | --- |
-| 推送 | `GET /ws/GetSyncMsg?key=`（升级为 WS） | `host/transport.js` + `host/ws-route.js` |
-| 回调登记 | `POST /message/SetCallback` | `host/pad-api.js` → `setCallback` |
+| 推送 | `GET /ws/outbound`（token/client_id/wxids） | `host/pad-feed.js` + `host/transport.js` |
 | 发文本 | `POST /message/SendTextMessage` | `host/pad-api.js` → `sendText` |
 | 发图片 | `POST /message/SendImageNewMessage` | `host/pad-api.js` → `sendImage` |
 | 在线状态 | `GET /login/GetLoginStatus` | 设置页「测试连接」 |
-| 轮询兜底 | `POST /message/HttpSyncMsg` | `host/pad-api.js` → `syncMessages` |
-| Bridge 代理 | `{base}/proxy/{wxid}/...` | `apiPrefix: '/proxy'` + `wxid` |
+| 账号 API | `{base}/proxy/{wxid}/...` | `baseUrl` + `token` + `wxid` |
 
 ## 有意保留的行为
 
-- 同一 `key` 只允许一个连接；dsh 里由插件单实例保证。
+- 一个连接对应一个机器人 wxid；客户端标识默认 `dsh`。
 - 发送必须秒级间隔：WechatPad 用会话级 `clientMsgId`，同秒会去重。
 - 群消息正文前缀 `wxid:\n`，需要拆出发言者。
 - 自己发的消息会作为普通消息回到推送里，需要 self-echo 过滤。
@@ -42,7 +40,7 @@
 
 - Pad 引用回复的 `msg_source` 回带未实现；视频保留为附件，不自动解析帧。
 - 媒体与扫码协议对照另见 [media.md](media.md)。
-- 多账号同时接入（hermes 的 `WECHATPAD_ACCOUNTS`）；本插件一次一个 Pad key。
+- 多账号同时接入（hermes 的 `WECHATPAD_ACCOUNTS`）；本插件一次一个机器人 wxid。
 
 ## 会话标题与侧栏归属
 

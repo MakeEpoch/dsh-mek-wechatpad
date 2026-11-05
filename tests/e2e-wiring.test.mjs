@@ -1,188 +1,48 @@
-/**
- * End-to-end wiring check against a real socket.
- *
- * The unit tests cover decoding and policy; this one proves the parts that
- * only a real server can show: the `/dsh-wechatpad/ws` upgrade connecting to a
- * fake WechatPad push feed, the webhook route accepting only the issued token,
- * and the settings RPC channel answering over `ctx.connection.rpc`.
- *
- * A minimal stand-in for dsh's `webServer` and `connection` services is used,
- * so the run needs nothing beyond Node itself.
- */
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { createRequire } from 'node:module';
 import test from 'node:test';
-
-import { registerPushRoute, registerWebhookRoute } from '../host/ws-route.js';
+import { WebSocketServer } from 'ws';
+import { createPadConnection } from '../host/connections/pad.js';
+import { resolveConfig } from '../host/config.js';
 import { registerManagementRpc } from '../host/management-rpc.js';
 
-const require = createRequire(import.meta.url);
-const { WebSocketServer, WebSocket } = require('ws');
-
-function listen(server) {
-  return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server.address().port)));
-}
-
-/** A fake WechatPad: one HTTP endpoint plus its push WebSocket. */
-async function startFakePad() {
-  const http = createServer((request, response) => {
-    const url = new URL(request.url, 'http://127.0.0.1');
-    if (url.pathname === '/ws/GetSyncMsg') {
-      response.writeHead(400).end('upgrade required');
-      return;
-    }
-    response.writeHead(200, { 'content-type': 'application/json' }).end('{"Success":true,"Code":200,"Data":{}}');
+test('Pad WS: account isolation, heartbeat, HTTP probe and shared token', async t => {
+  const calls = [];
+  const server = createServer((req, res) => {
+    calls.push({ path: req.url, token: req.headers['x-bridge-token'] });
+    res.setHeader('content-type', 'application/json');
+    res.end(JSON.stringify(req.url === '/bridge/accounts' ? { accounts: [{ wxid: 'bot', nick_name: 'Bot' }] } : { Code: 200, Data: { loginState: 1 } }));
   });
-  const wss = new WebSocketServer({ server: http, path: '/ws/GetSyncMsg' });
-  const port = await listen(http);
-  return { http, wss, port, close: () => { for (const client of wss.clients) client.terminate(); wss.close(); http.close(); } };
-}
-
-/** The subset of ctx.webServer this plugin uses. */
-function fakeWebServer(server) {
-  const routes = new Map();
-  const upgrades = new Map();
-  server.on('upgrade', (request, socket, head) => {
-    const path = new URL(request.url, 'http://127.0.0.1').pathname;
-    const handler = upgrades.get(path);
-    if (!handler) {
-      socket.destroy();
-      return;
-    }
-    handler(request, socket, head);
+  const wss = new WebSocketServer({ server, path: '/ws/outbound' });
+  const messages = [];
+  let params, pong;
+  const heartbeat = new Promise(resolve => { pong = resolve; });
+  wss.on('connection', (socket, req) => {
+    params = new URL(req.url, 'http://pad').searchParams;
+    socket.on('message', data => { if (JSON.parse(data).type === 'pong') pong(); });
+    setTimeout(() => {
+      socket.send(JSON.stringify({ type: 'ping' }));
+      for (const wxid of ['another-bot', 'bot']) socket.send(JSON.stringify({ type: 'message', wxid, message: {
+        msg_type: 1, new_msg_id: '9007199254740993', from_user_name: { str: 'peer' }, to_user_name: { str: 'bot' }, content: { str: 'hello' },
+      } }));
+    }, 20);
   });
-  server.on('request', (request, response) => {
-    const path = new URL(request.url, 'http://127.0.0.1').pathname;
-    const route = routes.get(path);
-    if (!route) {
-      response.writeHead(404).end('not found');
-      return;
-    }
-    Promise.resolve()
-      .then(() => route(request, response))
-      .catch((error) => {
-        if (!response.headersSent) response.writeHead(500).end(String(error?.message ?? error));
-        else response.destroy();
-      });
-  });
-  return {
-    register(route) {
-      routes.set(route.path, route.handler);
-      return () => routes.delete(route.path);
-    },
-    registerUpgrade(route) {
-      upgrades.set(route.path, route.handler);
-      return () => upgrades.delete(route.path);
-    },
-    getOrigin() {
-      return `http://127.0.0.1:${server.address().port}`;
-    },
-  };
-}
-
-test('push feed proxying: frames reach the handler through the dsh route', async () => {
-  const pad = await startFakePad();
-  const server = createServer();
-  const webServer = fakeWebServer(server);
-  const port = await listen(server);
-  const frames = [];
-  const ctx = {
-    webServer,
-    connection: { requestRejection: () => undefined },
-  };
-
-  const dispose = registerPushRoute({
-    ctx,
-    padTarget: () => ({ url: `ws://127.0.0.1:${pad.port}/ws/GetSyncMsg?key=k`, key: 'k' }),
-    onFrame: (frame) => frames.push(frame),
-  });
-
-  const client = new WebSocket(`ws://127.0.0.1:${port}/dsh-wechatpad/ws`);
-  await new Promise((resolve, reject) => {
-    client.once('open', resolve);
-    client.once('error', reject);
-  });
-  // The Pad pushes only after the proxy has connected upstream.
-  await new Promise((resolve) => pad.wss.once('connection', resolve));
-  const message = JSON.stringify({ from_user_name: { str: 'wxid_a' }, to_user_name: { str: 'wxid_bot' }, content: { str: 'hi' }, msg_type: 1, new_msg_id: 'm1' });
-  for (const client of pad.wss.clients) client.send(message);
-
-  const forwarded = await new Promise((resolve) => client.once('message', (data) => resolve(String(data))));
-  assert.equal(forwarded, message);
-  assert.deepEqual(frames, [message]);
-
-  client.close();
-  dispose();
-  pad.close();
-  await new Promise((resolve) => server.close(resolve));
-});
-
-test('push feed stops at the connection gate', async () => {
-  const server = createServer();
-  const webServer = fakeWebServer(server);
-  const port = await listen(server);
-  const ctx = { webServer, connection: { requestRejection: () => 403 } };
-  const dispose = registerPushRoute({
-    ctx,
-    padTarget: () => ({ url: 'ws://127.0.0.1:1/ws/GetSyncMsg', key: 'k' }),
-    onFrame: () => assert.fail('a rejected request must not reach the Pad'),
-  });
-  const client = new WebSocket(`ws://127.0.0.1:${port}/dsh-wechatpad/ws`);
-  const outcome = await new Promise((resolve) => {
-    client.once('error', () => resolve('error'));
-    client.once('open', () => resolve('open'));
-  });
-  assert.equal(outcome, 'error');
-  dispose();
-  await new Promise((resolve) => server.close(resolve));
-});
-
-test('webhook route: token and Host fence are enforced before parsing', async () => {
-  const server = createServer();
-  const webServer = fakeWebServer(server);
-  const port = await listen(server);
-  const received = [];
-  let reject = false;
-  const ctx = {
-    webServer,
-    connection: { requestRejection: () => (reject ? 403 : undefined) },
-  };
-  const dispose = registerWebhookRoute({
-    ctx,
-    path: '/dsh-wechatpad/callback',
-    webhookAuth: () => ({ token: 'issued-token' }),
-    onPayload: (payload) => received.push(payload),
-  });
-  const url = `http://127.0.0.1:${port}/dsh-wechatpad/callback`;
-
-  const noToken = await fetch(url, { method: 'POST', body: '{}', headers: { 'content-type': 'application/json' } });
-  assert.equal(noToken.status, 401);
-
-  const wrongToken = await fetch(url, { method: 'POST', body: '{}', headers: { 'content-type': 'application/json', 'x-wechatpad-token': 'nope' } });
-  assert.equal(wrongToken.status, 401);
-
-  const ok = await fetch(url, {
-    method: 'POST',
-    body: JSON.stringify({ new_msg_id: 'm9', from_user_name: { str: 'wxid_a' } }),
-    headers: { 'content-type': 'application/json', 'x-wechatpad-token': 'issued-token' },
-  });
-  assert.equal(ok.status, 200);
-  assert.equal(received.length, 1);
-  assert.equal(received[0].new_msg_id, 'm9');
-
-  const badJson = await fetch(url, { method: 'POST', body: '{oops', headers: { 'content-type': 'application/json', 'x-wechatpad-token': 'issued-token' } });
-  assert.equal(badJson.status, 400);
-
-  reject = true;
-  const fenced = await fetch(url, { method: 'POST', body: '{}', headers: { 'content-type': 'application/json', 'x-wechatpad-token': 'issued-token' } });
-  assert.equal(fenced.status, 403);
-
-  const wrongMethod = await fetch(url, { method: 'GET' });
-  assert.equal(wrongMethod.status, 405);
-
-  dispose();
-  await new Promise((resolve) => server.close(resolve));
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const connection = createPadConnection({ config: resolveConfig({ baseUrl: `http://127.0.0.1:${server.address().port}`, token: 'secret', wxid: 'bot' }) });
+  t.after(async () => { await connection.stop(); for (const ws of wss.clients) ws.terminate(); wss.close(); await new Promise(resolve => server.close(resolve)); });
+  let received;
+  const messageReady = new Promise(resolve => { received = resolve; });
+  await connection.start({ onMessage: msg => { messages.push(msg); received(); } });
+  await Promise.race([Promise.all([heartbeat, messageReady]), new Promise((_, reject) => setTimeout(() => reject(new Error('WS did not deliver')), 2000).unref())]);
+  assert.equal(params.get('token'), 'secret');
+  assert.equal(params.get('client_id'), 'dsh');
+  assert.equal(params.get('wxids'), 'bot');
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].messageId, '9007199254740993');
+  assert.equal((await connection.test()).ok, true);
+  assert.ok(calls.some(call => call.path === '/bridge/accounts' && call.token === 'secret'));
+  assert.ok(calls.some(call => call.path === '/proxy/bot/login/GetLoginStatus' && call.token === 'secret'));
+  assert.equal(connection.status().receiveMode, 'websocket');
 });
 
 test('management rpc channel is mounted on the connection carrier', async () => {

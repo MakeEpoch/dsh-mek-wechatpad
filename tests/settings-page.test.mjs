@@ -44,11 +44,9 @@ let describeBroken = false;
 const saved = {
   enabled: true,
   baseUrl: 'http://127.0.0.1:8059',
-  key: undefined,
-  keyConfigured: false,
-  apiPrefix: '',
+  token: undefined,
+  tokenConfigured: false,
   wxid: '',
-  receiveMode: 'websocket',
   requestTimeoutSeconds: 20,
   cwd: '',
   agentPreset: '',
@@ -83,7 +81,7 @@ const connection = {
         return reply({ settings: saved, defaults: {}, entryId: 'wechatpad', revision: 3, readable: true });
       }
       if (method === 'status.get') {
-        return reply({ phase: 'connected', label: '已连接', since: Date.now(), lastError: '', receiveMode: 'websocket', baseUrl: saved.baseUrl, messagesIn: 2, messagesOut: 1, webhookUrl: '', connected: true, keyConfigured: saved.keyConfigured });
+        return reply({ phase: 'connected', label: '已连接', since: Date.now(), lastError: '', receiveMode: 'websocket', baseUrl: saved.baseUrl, messagesIn: 2, messagesOut: 1, webhookUrl: '', connected: true, tokenConfigured: saved.tokenConfigured });
       }
       if (method === 'groups.seen') {
         return reply({ items: [{ chatId: 'room_sample@chatroom', count: 3, lastAt: Date.now(), sample: '在吗' }] });
@@ -91,8 +89,8 @@ const connection = {
       if (method === 'connection.test') return reply({ ok: true, detail: 'WechatPad 可访问' });
       if (method === 'settings.update') {
         Object.assign(saved, payload.payload.patch);
-        saved.key = undefined;
-        if (payload.payload.patch.key) saved.keyConfigured = true;
+        saved.token = undefined;
+        if (payload.payload.patch.token) saved.tokenConfigured = true;
         return reply({ saved: true });
       }
       if (method === 'settings.reset') return reply({ saved: true });
@@ -200,7 +198,7 @@ await act(async () => { await new Promise((resolve) => setTimeout(resolve, 450))
 const update = calls.find((call) => call.payload.method === 'settings.update');
 assert.ok(update, 'saving must call settings.update');
 assert.equal(update.payload.payload.patch.baseUrl, 'http://127.0.0.1:9000');
-assert.equal(update.payload.payload.patch.key, undefined);
+assert.equal(update.payload.payload.patch.token, undefined);
 assert.equal(update.payload.payload.expectedRevision, 3);
 
 // Connection test round-trips through the same channel.

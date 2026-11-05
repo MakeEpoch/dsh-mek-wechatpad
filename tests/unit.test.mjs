@@ -29,12 +29,12 @@ function padMessage({ fromUser, toUser, content, msgType = 1, id = 'm1', atUsers
 
 test('config: defaults fill every field and lists accept comma or full-width separators', () => {
   const resolved = resolveConfig({});
-  assert.equal(resolved.baseUrl, 'http://127.0.0.1:8059');
-  assert.equal(resolved.receiveMode, 'websocket');
+  assert.equal(resolved.baseUrl, 'http://127.0.0.1:8062');
+  assert.equal(resolved.clientId, 'dsh');
   assert.equal(resolved.dmPolicy, 'allowlist');
   assert.equal(resolved.groupPolicy, 'disabled');
   assert.deepEqual(resolved.allowedUsers, []);
-  assert.equal(resolved.key, '');
+  assert.equal(resolved.token, '');
   assert.deepEqual(splitList('a, b，c\nd'), ['a', 'b', 'c', 'd']);
 });
 
@@ -54,15 +54,15 @@ test('chat settings override only selected fields and inherit updated general va
 
 test('config: baseUrl is trimmed, prefixes normalized, numbers clamped', () => {
   const resolved = resolveConfig({
-    baseUrl: 'http://127.0.0.1:8059///',
+    baseUrl: 'http://127.0.0.1:8062///',
     apiPrefix: 'proxy/',
     webhookPath: 'hook',
     requestTimeoutSeconds: 999,
     maxReplyChunkLength: 1,
   });
-  assert.equal(resolved.baseUrl, 'http://127.0.0.1:8059');
-  assert.equal(resolved.apiPrefix, '/proxy');
-  assert.equal(resolved.webhookPath, '/hook');
+  assert.equal(resolved.baseUrl, 'http://127.0.0.1:8062');
+  assert.equal(resolved.apiPrefix, undefined);
+  assert.equal(resolved.webhookPath, undefined);
   assert.equal(resolved.requestTimeoutSeconds, 120);
   assert.equal(resolved.maxReplyChunkLength, 100);
 });
@@ -197,46 +197,27 @@ test('pad api: envelopes from Pad and Bridge normalize to ok/error', () => {
   assert.equal(extractMessageId({ chat_send_ret_list: [{ newMsgId: 42 }] }), '42');
 });
 
-test('pad api: bridge proxy needs a wxid but delegates the account key', () => {
-  const direct = new WechatPadClient({ baseUrl: 'http://127.0.0.1:8059', key: 'k' });
-  assert.equal(direct.url('/message/SendTextMessage'), 'http://127.0.0.1:8059/message/SendTextMessage');
-  assert.equal(direct.configured, true);
-
-  const bridged = new WechatPadClient({ baseUrl: 'http://127.0.0.1:8002', key: 'auth', apiPrefix: '/proxy', wxid: 'wxid_bot' });
-  assert.equal(bridged.url('/message/SendTextMessage'), 'http://127.0.0.1:8002/proxy/wxid_bot/message/SendTextMessage');
-  assert.equal(bridged.configured, true);
-
-  const incomplete = new WechatPadClient({ baseUrl: 'http://127.0.0.1:8002', key: 'auth', apiPrefix: '/proxy' });
-  assert.equal(incomplete.configured, false);
+test('pad api: requires service token and one wxid', () => {
+  const client = new WechatPadClient({ baseUrl: 'http://pad.test', token: 't', wxid: 'bot' });
+  assert.equal(client.url('/message/SendTextMessage'), 'http://pad.test/proxy/bot/message/SendTextMessage');
+  assert.equal(client.configured, true);
+  for (const options of [{ baseUrl: 'http://pad.test', token: 't' }, { baseUrl: 'http://pad.test', wxid: 'bot' }]) {
+    assert.equal(new WechatPadClient(options).configured, false);
+  }
 });
 
-test('pad api: actual requests omit Bridge keys and retain direct Pad authentication', async (t) => {
+test('pad api: requests authenticate with the service token and no account key', async t => {
   const requests = [];
   t.mock.method(globalThis, 'fetch', async (url, options) => {
     requests.push({ url: new URL(url), options });
-    return Response.json({ Code: 200, Success: false, Data: { isSendSuccess: true, chat_send_ret_list: [{ newMsgId: '123' }] } });
+    return Response.json({ Code: 200, Data: { isSendSuccess: true, newMsgId: '123' } });
   });
-  const target = outboundTarget(resolveConfig({
-    receiveMode: 'bridge', bridgeBaseUrl: 'http://bridge.test', bridgeAccounts: 'wxid_bot',
-  }));
-  const bridge = new WechatPadClient(target);
-  assert.equal(bridge.configured, true, 'no Pad key is needed in Bridge mode');
-  const receipt = await bridge.sendText('1@chatroom', '群回复');
-  assert.equal(receipt.ok, true);
-  assert.equal(receipt.messageId, '123');
-  assert.equal(requests[0].url.pathname, '/proxy/wxid_bot/message/SendTextMessage');
-  assert.equal(requests[0].url.searchParams.has('key'), false);
-  assert.equal(JSON.parse(requests[0].options.body).MsgItem[0].ToUserName, '1@chatroom');
-
-  const staleKey = new WechatPadClient({ ...target, key: 'bridge' });
-  await staleKey.sendText('wxid_peer', '私聊回复');
-  assert.equal(requests[1].url.searchParams.has('key'), false, 'even a stale placeholder must not override Bridge authentication');
-  assert.equal(JSON.parse(requests[1].options.body).MsgItem[0].ToUserName, 'wxid_peer');
-
-  const direct = new WechatPadClient({ baseUrl: 'http://pad.test', key: 'pad-secret' });
-  await direct.loginStatus();
-  assert.equal(requests[2].url.searchParams.get('key'), 'pad-secret');
-  assert.equal(new WechatPadClient({ baseUrl: 'http://pad.test' }).configured, false);
+  const target = outboundTarget(resolveConfig({ baseUrl: 'http://pad.test', token: 'secret', wxid: 'bot' }));
+  const client = new WechatPadClient(target);
+  assert.equal((await client.sendText('peer', 'hello')).messageId, '123');
+  assert.equal(requests[0].url.pathname, '/proxy/bot/message/SendTextMessage');
+  assert.equal(requests[0].url.search, '');
+  assert.equal(requests[0].options.headers['X-Bridge-Token'], 'secret');
 });
 
 test('pad api: voice benign ret is endpoint-scoped and structured errors stay readable', () => {
@@ -277,7 +258,7 @@ test('pad api: nested send rejection overrides an outer success envelope', async
     Code: 200, Success: true, Data: { isSendSuccess: false, errMsg: 'bad recipient' },
   }));
   const sender = new (await import('../host/outbound.js')).OutboundSender({
-    client: new WechatPadClient({ baseUrl: 'http://bridge.test', apiPrefix: '/proxy', wxid: 'wxid_bot' }),
+    client: new WechatPadClient({ baseUrl: 'http://bridge.test', token: 't', wxid: 'wxid_bot' }),
   });
   assert.deepEqual(await sender.sendReply('wxid_peer', 'hello'), { ok: false, delivered: 0, error: 'bad recipient' });
 });
@@ -292,9 +273,9 @@ test('harness: reply text comes from text parts only, never reasoning', () => {
 });
 
 test('settings: read model hides the secret but reports its presence', () => {
-  const model = panelReadModel({ ...resolveConfig({}), key: 'super-secret' });
-  assert.equal(model.key, undefined);
-  assert.equal(model.keyConfigured, true);
+  const model = panelReadModel({ ...resolveConfig({}), token: 'super-secret' });
+  assert.equal(model.token, undefined);
+  assert.equal(model.tokenConfigured, true);
   assert.ok(!JSON.stringify(model).includes('super-secret'));
 });
 
@@ -322,7 +303,7 @@ test('config schema: every field is editable and only credentials are secrets', 
   for (const [name, id] of fields) {
     assert.equal(refs[id]?.meta?.volatile, true, `${name} must be volatile so dsh Settings projects it`);
   }
-  const secrets = new Set(['key', 'bridgeToken']);
+  const secrets = new Set(['token']);
   for (const name of secrets) {
     assert.equal(refs[root.dict[name]].meta.role, 'secret', `${name} must be redacted`);
     assert.equal(refs[root.dict[name]].meta.volatile, true, `${name} must still be editable`);
@@ -342,7 +323,7 @@ test('config schema: settings redaction removes the key value but keeps its pres
   const json = Config.toJSON();
   const refs = json.refs;
   const root = refs[json.uid];
-  const keyNode = refs[root.dict.key];
+  const keyNode = refs[root.dict.token];
   const { value, secrets } = redactSecrets(keyNode, 'super-secret');
   assert.equal(value, undefined);
   assert.deepEqual(secrets, [{ path: [], set: true }]);
@@ -353,38 +334,34 @@ test('config: a volatile parsed Config reads back as plain runtime values', () =
   // live reference that later settings writes update in place. The runtime must
   // read through it — a missed `.get()` silently froze the bridge on start-up
   // defaults, and once produced a `"/[object Object]"` route path.
-  const parsed = Config({ key: 'secret-key', baseUrl: 'http://127.0.0.1:9000', dmPolicy: 'open' });
+  const parsed = Config({ token: 'secret-key', baseUrl: 'http://127.0.0.1:9000', dmPolicy: 'open' });
   assert.equal(typeof parsed.baseUrl?.get, 'function', 'volatile fields arrive as references');
   const resolved = resolveConfig(parsed);
   assert.equal(resolved.baseUrl, 'http://127.0.0.1:9000');
-  assert.equal(resolved.key, 'secret-key');
+  assert.equal(resolved.token, 'secret-key');
   assert.equal(resolved.dmPolicy, 'open');
-  assert.equal(resolved.webhookPath, '/wechatpad/callback');
-  assert.equal(resolved.receiveMode, 'websocket');
-  assert.equal(typeof resolved.webhookPath, 'string');
+  assert.equal(resolved.webhookPath, undefined);
+  assert.equal(resolved.clientId, 'dsh');
+  assert.equal(typeof resolved.clientId, 'string');
   // A plain object (hand-written patch, defaults) keeps working unchanged.
-  assert.equal(resolveConfig({ baseUrl: 'http://x', key: 'k' }).baseUrl, 'http://x');
+  assert.equal(resolveConfig({ baseUrl: 'http://x', token: 'k' }).baseUrl, 'http://x');
 });
 
 test('config: the secret is still redacted when the runtime config is normalized', () => {
-  const parsed = Config({ key: 'secret-key' });
+  const parsed = Config({ token: 'secret-key' });
   const resolved = resolveConfig(parsed);
   const model = panelReadModel(resolved);
-  assert.equal(model.key, undefined);
-  assert.equal(model.keyConfigured, true);
+  assert.equal(model.token, undefined);
+  assert.equal(model.tokenConfigured, true);
   assert.ok(!JSON.stringify(model).includes('secret-key'));
 });
 
-test('settings read model: both credentials are write-only', () => {
-  const model = panelReadModel(resolveConfig({ key: 'wx-key', bridgeToken: 'bridge-token', bridgeBaseUrl: 'http://127.0.0.1:8002' }));
-  assert.equal(model.key, undefined);
-  assert.equal(model.bridgeToken, undefined);
-  assert.equal(model.keyConfigured, true);
-  assert.equal(model.bridgeTokenConfigured, true);
-  assert.equal(model.bridgeBaseUrl, 'http://127.0.0.1:8002');
-  const serialized = JSON.stringify(model);
-  assert.ok(!serialized.includes('wx-key'));
-  assert.ok(!serialized.includes('bridge-token'));
+test('settings read model: the sole service token is write-only', () => {
+  const model = panelReadModel(resolveConfig({ token: 'service-secret', baseUrl: 'http://pad.test' }));
+  assert.equal(model.token, undefined);
+  assert.equal(model.tokenConfigured, true);
+  assert.equal(model.baseUrl, 'http://pad.test');
+  assert.ok(!JSON.stringify(model).includes('service-secret'));
 });
 
 test('settings: bridge subscription settings are editable from the panel', async () => {
@@ -398,12 +375,12 @@ test('settings: bridge subscription settings are editable from the panel', async
   };
   await savePanelSettings({
     ctx,
-    patch: { receiveMode: 'bridge', bridgeBaseUrl: 'http://127.0.0.1:8002', bridgeAccounts: 'wxid_fixture_bot', bridgeToken: 'tok' },
+    patch: { baseUrl: 'http://127.0.0.1:8062', wxid: 'wxid_fixture_bot', token: 'tok' },
     expectedRevision: 2,
   });
   assert.deepEqual(writes[0], {
     ns: 'wechatpad',
-    patch: { receiveMode: 'bridge', bridgeBaseUrl: 'http://127.0.0.1:8002', bridgeAccounts: 'wxid_fixture_bot', bridgeToken: 'tok' },
+    patch: { baseUrl: 'http://127.0.0.1:8062', wxid: 'wxid_fixture_bot', token: 'tok' },
   });
 });
 
@@ -509,9 +486,9 @@ test('config: provider defaults to pad so every existing profile keeps working',
   assert.equal(resolveConfig({ provider: '  pad ' }).provider, 'pad');
   // Existing pad fields and their defaults are untouched.
   const resolved = resolveConfig({});
-  assert.equal(resolved.baseUrl, 'http://127.0.0.1:8059');
-  assert.equal(resolved.receiveMode, 'websocket');
-  assert.equal(resolved.webhookPath, '/wechatpad/callback');
+  assert.equal(resolved.baseUrl, 'http://127.0.0.1:8062');
+  assert.equal(resolved.clientId, 'dsh');
+  assert.equal(resolved.webhookPath, undefined);
   assert.equal(resolved.requestTimeoutSeconds, 20);
 });
 
@@ -532,7 +509,7 @@ test('config: iLink fields normalize and never add a secret', () => {
   // The iLink token is not a config field: there is nothing to leak.
   const model = panelReadModel(resolveConfig({ provider: 'weixin' }));
   assert.ok(!('weixinToken' in model));
-  assert.ok(!('token' in model));
+  assert.equal(model.token, undefined);
 });
 
 test('config schema: new fields are editable and provider is a pad/weixin union', () => {
@@ -548,7 +525,7 @@ test('config schema: new fields are editable and provider is a pad/weixin union'
     .filter(([, id]) => json.refs[id]?.meta?.role === 'secret')
     .map(([name]) => name)
     .sort();
-  assert.deepEqual(secrets, ['bridgeToken', 'key']);
+  assert.deepEqual(secrets, ['token']);
 });
 
 test('settings: panel defaults are plain values, not volatile references', () => {
@@ -588,7 +565,7 @@ test('settings: the panel defaults endpoint carries every field the page renders
   // an untouched control (the protocol select, the iLink switches) shows the
   // schema default instead of a blank box.
   const defaults = panelDefaults();
-  for (const name of ['provider', 'weixinTyping', 'weixinReplyQuote', 'weixinBotType', 'requestTimeoutSeconds', 'receiveMode']) {
+  for (const name of ['provider', 'weixinTyping', 'weixinReplyQuote', 'weixinBotType', 'requestTimeoutSeconds', 'clientId', 'wxid']) {
     assert.ok(name in defaults, `${name} must be in the panel defaults`);
   }
   assert.equal(defaults.provider, 'pad');

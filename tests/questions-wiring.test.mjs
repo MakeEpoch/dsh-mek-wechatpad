@@ -100,7 +100,7 @@ for (const isGroup of [false, true]) {
     };
     let mergeDelay = 0;
     service = new WechatPadService({ ctx, config: {
-      receiveMode: 'bridge', bridgeBaseUrl: baseUrl, bridgeToken: 'test', bridgeAccounts: 'wxid_bot',
+       baseUrl: baseUrl, token: 'test', wxid: 'wxid_bot',
       selfWxid: 'wxid_bot',
       messageMergeDelaySeconds: { get: () => mergeDelay },
       dmPolicy: 'allowlist', allowedUsers: ['alice'],

@@ -52,16 +52,11 @@ const saved = {
   provider: 'pad',
   enabledProviders: ['pad', 'weixin'],
   baseUrl: 'http://127.0.0.1:8059',
-  key: undefined,
-  keyConfigured: true,
-  apiPrefix: '',
+  token: undefined,
+  tokenConfigured: true,
   wxid: '',
-  receiveMode: 'websocket',
-  bridgeBaseUrl: '',
-  bridgeTokenConfigured: false,
-  bridgeAccounts: '',
-  bridgeClientId: 'dsh',
-  webhookPath: '/wechatpad/callback',
+  tokenConfigured: false,
+  clientId: 'dsh',
   requestTimeoutSeconds: 20,
   weixinAccountFile: '',
   weixinTyping: true,
@@ -123,7 +118,7 @@ const goodRpc = {
       return reply({
         phase: 'connected', label: '已连接', since: Date.now(), lastError: '',
         receiveMode: saved.receiveMode, baseUrl: saved.baseUrl, messagesIn: 2, messagesOut: 1,
-        webhookUrl: '', connected: true, keyConfigured: saved.keyConfigured, provider: saved.provider,
+        webhookUrl: '', connected: true, tokenConfigured: saved.tokenConfigured, provider: saved.provider,
         weixinBound: Boolean(bot), weixinBotId: bot?.id ?? '', weixinBoundAt: bot?.at ?? '',
       });
     }
@@ -137,9 +132,9 @@ const goodRpc = {
     if (method === 'settings.update') {
       // Like the Host: a written patch lands in the profile, and the secret
       // only ever comes back as a presence flag.
-      const { key: writtenKey, ...rest } = body.patch ?? {};
+      const { token: writtenKey, ...rest } = body.patch ?? {};
       Object.assign(saved, rest);
-      if (writtenKey) saved.keyConfigured = true;
+      if (writtenKey) saved.tokenConfigured = true;
       return reply({ saved: true });
     }
     if (method === 'settings.reset') return reply({ saved: true });
@@ -176,7 +171,7 @@ const ZH = {
   tabSession: '会话',
   tabAccess: '访问控制',
   providerLabel: '微信接入方式',
-  providerPad: 'WechatPad：直连 Pad / WeChat Bridge',
+  providerPad: 'WechatPad',
   providerWeixin: '微信机器人：扫码绑定腾讯 iLink，无需 Pad',
   weixinGenerate: '生成二维码',
   weixinCancel: '取消',
@@ -294,15 +289,11 @@ assert.equal(tabButton('access').getAttribute('aria-selected'), 'true');
 await keydown(tabButton('access'), 'Home');
 assert.equal(tabButton('pad').getAttribute('aria-selected'), 'true');
 // Only mode-specific fields are shown; advanced defaults are collapsed.
-await selectOption(container.querySelector('select[name=connectionMode]'), 'bridge');
-assert.ok(container.querySelector('input[name=bridgeBaseUrl]'));
-assert.equal(container.querySelector('input[name=baseUrl]'), null);
+assert.equal(container.querySelector('select[name=connectionMode]'), null);
 assert.equal(container.querySelector('select[name=receiveMode]'), null);
-assert.ok(container.querySelector('input[name=bridgeClientId]').closest('details:not([open])'));
-assert.equal(container.querySelector('#wxp-panel-pad button').disabled, true, 'do not test stale saved settings');
-await click(byText('button', '放弃更改'));
-assert.equal(container.querySelector('input[name=baseUrl]').value, saved.baseUrl);
-assert.equal(saveButton().disabled, true);
+for (const field of ['baseUrl', 'token', 'wxid', 'clientId']) assert.ok(container.querySelector(`input[name=${field}]`));
+for (const field of ['bridgeBaseUrl', 'bridgeToken', 'bridgeAccounts', 'key', 'apiPrefix', 'webhookPath']) assert.equal(container.querySelector(`input[name=${field}]`), null);
+assert.ok(container.querySelector('input[name=clientId]').closest('details:not([open])'));
 await typeInto(container.querySelector('input[name=baseUrl]'), 'http://127.0.0.1:9000');
 await click(tabButton('session'));
 await click(tabButton('pad'));
@@ -368,7 +359,7 @@ await click(tabButton('weixin'));
 await click(byText('button', '生成二维码'));
 assert.match(text(), /微信服务请求超时，请稍后重试/);
 assert.doesNotMatch(text(), /ticket|attemptId/);
-assert.match(text(), /仅用于 WechatPad \/ Bridge；扫码机器人不使用白名单/);
+assert.match(text(), /仅用于 WechatPad；扫码机器人不使用白名单/);
 // A denied sender is visible and can be staged explicitly without opening DMs.
 activeRpc = { call: async (channel, endpoint, payload) => payload.method === 'status.get'
   ? reply({ provider: 'pad', connections: { pad: { phase: 'connected', label: '已连接', messagesIgnored: 1, lastIgnored: { reason: 'dm-not-allowed', senderId: 'wxid_new_pad' } } } })

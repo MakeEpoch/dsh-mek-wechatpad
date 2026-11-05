@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { WechatPadClient } from '../host/pad-api.js';
 import { outboundTarget, resolveConfig } from '../host/config.js';
-import { buildBridgeWsUrl, unwrapBridgeFrame } from '../host/bridge.js';
+import { buildPadWsUrl, unwrapPadFrame } from '../host/pad-feed.js';
 import { decodeMessage } from '../host/inbound.js';
 
 test('wechatReal08: subscription and sends share the configured token without leaking it into API URLs', async t => {
@@ -11,7 +11,7 @@ test('wechatReal08: subscription and sends share the configured token without le
     calls.push({ url: new URL(url), options });
     return Response.json({ Code: 200, Success: true, Data: { NewMsgId: '9007199254740993' } });
   });
-  const config = resolveConfig({ receiveMode: 'bridge', bridgeBaseUrl: 'http://wechat-bot:8062', bridgeToken: 'test-secret', bridgeAccounts: 'wxid_bot' });
+  const config = resolveConfig({  baseUrl: 'http://wechat-bot:8062', token: 'test-secret', wxid: 'wxid_bot' });
   const target = outboundTarget(config);
   const result = await new WechatPadClient(target).sendText('wxid_friend', 'hello');
   assert.equal(result.ok, true);
@@ -19,13 +19,13 @@ test('wechatReal08: subscription and sends share the configured token without le
   assert.equal(calls[0].url.pathname, '/proxy/wxid_bot/message/SendTextMessage');
   assert.equal(calls[0].url.search, '');
   assert.equal(calls[0].options.headers['X-Bridge-Token'], 'test-secret');
-  const ws = new URL(buildBridgeWsUrl({ baseUrl: target.baseUrl, token: config.bridgeToken, accounts: ['wxid_bot'] }));
+  const ws = new URL(buildPadWsUrl({ baseUrl: target.baseUrl, token: config.token, wxid: 'wxid_bot' }));
   assert.equal(ws.port, '8062');
   assert.equal(ws.searchParams.get('token'), 'test-secret');
 });
 
 test('wechatReal08: normalized native group message preserves exact IDs and mention routing', () => {
-  const frame = unwrapBridgeFrame({ type: 'message', wxid: 'wxid_bot', message: {
+  const frame = unwrapPadFrame({ type: 'message', wxid: 'wxid_bot', message: {
     msg_id: 123, new_msg_id: '9007199254740993', msg_type: 1,
     from_user_name: { str: 'room@chatroom' }, to_user_name: { str: 'wxid_bot' },
     content: { str: 'wxid_friend:\n@Bot\u2005 hello' },

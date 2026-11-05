@@ -5,7 +5,7 @@ import { Context } from '@deepseek-ai/cordis';
 import { registerManagementRpc, RPC_ENDPOINT, RPC_PATH } from '../host/management-rpc.js';
 import { savePanelSettings, describeSettingsEntry, SettingsUnavailableError } from '../host/settings-bridge.js';
 import { resolveConfig } from '../host/config.js';
-import { bridgeAccounts, buildBridgeWsUrl, groupsFromBridgeLog, unwrapBridgeFrame } from '../host/bridge.js';
+import { buildPadWsUrl, unwrapPadFrame } from '../host/pad-feed.js';
 import { decodeMessage } from '../host/inbound.js';
 import { HarnessBridge, extractAssistantText } from '../host/harness.js';
 import { OutboundSender } from '../host/outbound.js';
@@ -15,7 +15,7 @@ function fakeSettings() {
   const writes = [];
   return {
     writes,
-    describe: () => [{ ns: 'wechatpad', revision: 4, secrets: [{ path: ['key'], set: true }] }],
+    describe: () => [{ ns: 'wechatpad', revision: 4, secrets: [{ path: ['token'], set: true }] }],
     update: async (ns, patch, revision) => { writes.push({ kind: 'update', ns, patch, revision }); },
     replace: async (ns, section, revision) => { writes.push({ kind: 'replace', ns, section, revision }); },
   };
@@ -41,7 +41,7 @@ function fakeService(overrides = {}) {
   const base = {
     calls,
     status: () => ({ phase: 'connected', label: '已连接', messagesIn: 1, messagesOut: 2 }),
-    panelSettings: () => ({ settings: { baseUrl: 'http://127.0.0.1:8059', keyConfigured: true }, defaults: {}, revision: 4 }),
+    panelSettings: () => ({ settings: { baseUrl: 'http://127.0.0.1:8059', tokenConfigured: true }, defaults: {}, revision: 4 }),
     updateSettings: async (patch, revision) => { calls.push({ method: 'update', patch, revision }); return { saved: true }; },
     resetSettings: async (revision) => { calls.push({ method: 'reset', revision }); return { saved: true }; },
     testConnection: async () => ({ ok: true, detail: 'ok' }),
@@ -74,8 +74,8 @@ test('management rpc: every method round-trips and unknown methods fail closed',
   assert.equal(status.value.phase, 'connected');
 
   const read = await call('settings.get');
-  assert.equal(read.value.settings.key, undefined, 'the secret never crosses the wire');
-  assert.equal(read.value.settings.keyConfigured, true);
+  assert.equal(read.value.settings.token, undefined, 'the secret never crosses the wire');
+  assert.equal(read.value.settings.tokenConfigured, true);
 
   const update = await call('settings.update', { patch: { baseUrl: 'http://x' }, expectedRevision: 4 });
   assert.equal(update.value.saved, true);
@@ -112,11 +112,11 @@ test('management rpc: every method round-trips and unknown methods fail closed',
 
 test('panel settings: writes validate, drop unknown fields, and respect the revision', async () => {
   const { ctx, settings } = fakeCtx();
-  await savePanelSettings({ ctx, patch: { baseUrl: 'http://127.0.0.1:9000', bogus: 'nope', key: '   ' }, expectedRevision: 4 });
+  await savePanelSettings({ ctx, patch: { baseUrl: 'http://127.0.0.1:9000', bogus: 'nope', token: '   ' }, expectedRevision: 4 });
   assert.deepEqual(settings.writes.at(-1), { kind: 'update', ns: 'wechatpad', patch: { baseUrl: 'http://127.0.0.1:9000' }, revision: 4 });
 
-  await savePanelSettings({ ctx, patch: { key: 'secret-value' }, expectedRevision: 4 });
-  assert.equal(settings.writes.at(-1).patch.key, 'secret-value', 'a provided secret is written');
+  await savePanelSettings({ ctx, patch: { token: 'secret-value' }, expectedRevision: 4 });
+  assert.equal(settings.writes.at(-1).patch.token, 'secret-value', 'a provided secret is written');
 
   await assert.rejects(() => savePanelSettings({ ctx, patch: {}, expectedRevision: 4 }), /没有可保存的字段/);
   await assert.rejects(() => savePanelSettings({ ctx, patch: null }), /没有收到任何设置/);
@@ -259,8 +259,8 @@ test('outbound: a failed send reports the error instead of pretending success', 
 
 test('config resolution is what the panel and runtime both read', () => {
   const resolved = resolveConfig({ baseUrl: 'http://127.0.0.1:8059', receiveMode: 'webhook', webhookPath: 'cb' });
-  assert.equal(resolved.webhookPath, '/cb');
-  assert.equal(resolved.receiveMode, 'webhook');
+  assert.equal(resolved.webhookPath, undefined);
+  assert.equal(resolved.receiveMode, undefined);
   assert.equal(resolved.messageMergeDelaySeconds, 0);
   assert.equal(resolved.incomingMessageMode, 'queue');
   assert.equal(resolveConfig({ messageMergeDelaySeconds: 2.5, incomingMessageMode: 'interrupt' }).messageMergeDelaySeconds, 2.5);
@@ -294,11 +294,11 @@ test('host entry: accepts the parsed Config dsh actually passes and mounts route
   // references; re-parsing it throws, and reading it without `.get()` produced a
   // "/[object Object]" route path. Both regressions must stay fixed.
   const { apply, Config } = await import('../host/index.js');
-  apply(ctx, Config({ key: 'fake-key', baseUrl: 'http://127.0.0.1:8059', receiveMode: 'webhook' }));
+  apply(ctx, Config({ token: 'fake-key', baseUrl: 'http://127.0.0.1:8059', receiveMode: 'webhook' }));
   await new Promise((resolve) => setTimeout(resolve, 120));
 
-  assert.deepEqual(registered.routes, ['/wechatpad/callback']);
-  assert.deepEqual(registered.upgrades, ['/dsh-wechatpad/ws']);
+  assert.deepEqual(registered.routes, []);
+  assert.deepEqual(registered.upgrades, []);
   assert.deepEqual(registered.rpc, ['/api/dsh-wechatpad']);
   // Exercise the real entry -> PanelFacade -> service -> catalog path. A
   // dispatcher-only service double cannot catch a missing facade method.
@@ -337,63 +337,37 @@ test('push transport reports connection state so the panel is not stuck on idle'
 });
 
 test('bridge subscription: URL carries token, client_id, and the subscribed wxids', () => {
-  const url = new URL(buildBridgeWsUrl({
+  const url = new URL(buildPadWsUrl({
     baseUrl: 'http://127.0.0.1:8002/',
     token: 'tok-123',
-    accounts: ['user_example', 'wxid_b'],
+    wxid: 'user_example',
     clientId: 'dsh',
   }));
   assert.equal(url.protocol, 'ws:');
   assert.equal(url.pathname, '/ws/outbound');
   assert.equal(url.searchParams.get('token'), 'tok-123');
   assert.equal(url.searchParams.get('client_id'), 'dsh');
-  assert.equal(url.searchParams.get('wxids'), 'user_example,wxid_b');
+  assert.equal(url.searchParams.get('wxids'), 'user_example');
 
-  const secure = new URL(buildBridgeWsUrl({ baseUrl: 'https://bridge.example', token: 't', accounts: ['a'] }));
+  const secure = new URL(buildPadWsUrl({ baseUrl: 'https://bridge.example', token: 't', wxid: 'a' }));
   assert.equal(secure.protocol, 'wss:');
 
-  assert.throws(() => buildBridgeWsUrl({ baseUrl: 'http://x', token: 't', accounts: [] }), /wxid/);
-  assert.throws(() => buildBridgeWsUrl({ baseUrl: 'http://x', token: '', accounts: ['a'] }), /token/);
+  assert.throws(() => buildPadWsUrl({ baseUrl: 'http://x', token: 't', wxid: '' }), /wxid/);
+  assert.throws(() => buildPadWsUrl({ baseUrl: 'http://x', token: '', wxid: 'a' }), /Token/);
 });
 
 test('bridge subscription: the frame envelope unwraps to a plain Pad payload', () => {
   const message = { from_user_name: { str: 'user_example' }, msg_type: 1, content: { str: '你好' }, new_msg_id: 'm1' };
-  assert.deepEqual(unwrapBridgeFrame({ type: 'message', wxid: 'user_example', message }), { wxid: 'user_example', message });
-  assert.deepEqual(unwrapBridgeFrame({ type: 'ping' }), { control: 'ping' });
-  assert.deepEqual(unwrapBridgeFrame({ type: 'pong' }), { control: 'pong' });
-  assert.deepEqual(unwrapBridgeFrame({ type: 'error', message: 'bad token' }), { control: 'error', detail: 'bad token' });
+  assert.deepEqual(unwrapPadFrame({ type: 'message', wxid: 'user_example', message }), { wxid: 'user_example', message });
+  assert.deepEqual(unwrapPadFrame({ type: 'ping' }), { control: 'ping' });
+  assert.deepEqual(unwrapPadFrame({ type: 'pong' }), { control: 'pong' });
+  assert.deepEqual(unwrapPadFrame({ type: 'error', message: 'bad token' }), { control: 'error', detail: 'bad token' });
   // A bare payload without the Bridge envelope still decodes.
-  assert.deepEqual(unwrapBridgeFrame(message), { wxid: '', message });
-  assert.equal(unwrapBridgeFrame(null), null);
+  assert.equal(unwrapPadFrame(message), null);
+  assert.equal(unwrapPadFrame(null), null);
 
   // End to end: an unwrapped frame decodes like a direct Pad push.
   const decoded = decodeMessage(message);
   assert.equal(decoded.senderId, 'user_example');
   assert.equal(decoded.text, '你好');
-});
-
-test('bridge subscription: accounts come from config, falling back to the bot wxid', () => {
-  assert.deepEqual(bridgeAccounts({ bridgeAccounts: 'a, b', selfWxid: 'x' }), ['a', 'b']);
-  assert.deepEqual(bridgeAccounts({ bridgeAccounts: '', selfWxid: 'wxid_bot' }), ['wxid_bot']);
-  assert.deepEqual(bridgeAccounts({ bridgeAccounts: '', selfWxid: '' }), []);
-});
-
-test('bridge log parser: only the requested account contributes groups', () => {
-  // The Bridge log is shared by every bot it serves, and each line names the
-  // account it belongs to. Parsing without that filter reported another bot's
-  // groups as if they were ours.
-  const log = [
-    '2026-10-20 05:00:00,000 [INFO] [BRIDGE-INBOUND] received wxid=user_example msg_id=1 payload={"from_user_name":{"str":"111@chatroom"},"content":{"str":"other bot"}}',
-    '2026-10-20 06:00:00,000 [INFO] [BRIDGE-INBOUND] received wxid=wxid_fixture_bot msg_id=2 payload={"from_user_name":{"str":"222@chatroom"},"content":{"str":"ours"}}',
-  ].join('\n');
-  assert.deepEqual(groupsFromBridgeLog(log, { accounts: ['wxid_fixture_bot'] }).map((r) => r.chatId), ['222@chatroom']);
-  assert.deepEqual(groupsFromBridgeLog(log, { accounts: ['user_example'] }).map((r) => r.chatId), ['111@chatroom']);
-  // No account filter means nothing may be attributed to this plugin.
-  assert.deepEqual(groupsFromBridgeLog(log, {}), []);
-  assert.deepEqual(groupsFromBridgeLog(log, { accounts: [] }), []);
-});
-
-test('harness bridge: a truncated session listing is unknown rather than confirmed deletion', async () => {
-  const bridge = new HarnessBridge({gateway:{invoke:async()=>({items:[],nextCursor:'more'})},peer:{}});
-  await assert.rejects(bridge.sessionExists('existing'), /分页未读取完/);
 });

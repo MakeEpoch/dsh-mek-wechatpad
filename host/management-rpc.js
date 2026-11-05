@@ -11,7 +11,6 @@
  * Every method here is deliberately narrow — an allowlist of what the
  * "设置 → 微信" page may ask for.
  */
-import { currentWebhookUrl } from './wechatpad-service.js';
 
 /**
  * Channel endpoint as the browser names it. Connection composes the URL as
@@ -122,8 +121,6 @@ async function dispatch(service, method, payload) {
       return service.renameConversationGroup(payload?.groupKey, payload?.name);
     case 'conversations.list':
       return (await service.listConversations?.()) ?? { items: [] };
-    case 'webhook.url':
-      return { url: currentWebhookUrl(service) };
     default: {
       const error = new Error(`未知的接口：${method}`);
       error.code = 'wechatpad/unknown-method';
