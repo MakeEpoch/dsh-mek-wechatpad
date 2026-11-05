@@ -119,6 +119,10 @@ async function dispatch(service, method, payload) {
       return (await service.listSeenGroups?.()) ?? { items: [] };
     case 'conversations.renameGroup':
       return service.renameConversationGroup(payload?.groupKey, payload?.name);
+    case 'bot-links.get':
+      return service.botLinksView();
+    case 'bot-links.update':
+      return service.updateBotLink(payload);
     case 'conversations.list':
       return (await service.listConversations?.()) ?? { items: [] };
     default: {

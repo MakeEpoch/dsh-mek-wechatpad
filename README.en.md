@@ -72,3 +72,9 @@ tests/                unit, host integration, settings-page render
 ```
 
 MIT licensed.
+
+## Bot links (0.1.8)
+
+Settings → WeChat → Sessions → Bot links binds a WechatPad group to a Bot group, or a WeChat private chat to a Main Bot only. Requires the optional `mekBotBridge` v1 service (downstream Bot 0.2.8). Identity and chat-type restrictions are validated server-side on every use. Existing access and mention policies still apply. Unlinked chats retain their ordinary Sessions; removed or demoted targets fail without creating a fallback Session.
+
+Visible text replies are mirrored; hidden Bot turns, reasoning and user echoes are excluded. Incoming messages queue; `/stop` targets the linked conversation. Approval, credentials and interactive cards remain in DSH. Historical replay, cross-end card answers, generated-file forwarding and the upstream eight-platform IM module are outside this version. Links are atomically stored with a revision in `wechatpad/bot-links.json` and saved independently from connection settings.

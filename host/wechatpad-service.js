@@ -27,6 +27,7 @@ import { MessageInbox } from './message-inbox.js';
 import { GroupContext, withGroupContext } from './group-context.js';
 import { chalk } from './outbound.js';
 import { QuestionRelay } from './questions.js';
+import { BotLinks } from './bot-links.js';
 import { NotificationRelay } from './notifications.js';
 import {
   describeSettingsEntry, panelReadModel, persistedFormValue, resetPanelSettings, savePanelSettings,
@@ -49,6 +50,7 @@ export function workspaceForChat(provider, chatId) {
 }
 
 class SingleConnectionService {
+  #botLinks;
   #ctx;
   #config;
   #rawConfig;
@@ -90,7 +92,8 @@ class SingleConnectionService {
    *   deployment can never point the service at a different adapter by accident;
    *   this seam exists so tests (and a future multi-account host) can supply one.
    */
-  constructor({ ctx, config, logger, createConnection: create }) {
+  constructor({ ctx, config, logger, createConnection: create, botLinks }) {
+    this.#botLinks = botLinks;
     this.#ctx = ctx;
     this.#logger = logger ?? (() => {});
     this.#rawConfig = config;
@@ -172,6 +175,7 @@ class SingleConnectionService {
     await catalog.ready;
     this.#delivery = new SessionDelivery({
       ctx:this.#ctx, catalog, provider:this.#configuredProvider(), logger:this.#logger,
+      allowOwner: owner => !this.#botLinks || this.#botLinks.ordinaryDeliveryAllowed(this.#configuredProvider(), owner.chatId),
       onEvent:(owner,event,turn) => this.#handleDeliveryEvent(owner,event,turn),
       onCancel:(owner,turn) => this.#stopDelivery(this.#deliveryKey(owner.sessionId,turn)),
     });
@@ -318,7 +322,8 @@ class SingleConnectionService {
 
     // The original group sender may answer a pending question without another @.
     // Group/DM allowlists and self-echo checks still apply.
-    const answering = this.#questions?.canAnswer(message);
+    const linked = await this.#botLinks?.binding(this.#configuredProvider(), message.chatId);
+    const answering = !linked && this.#questions?.canAnswer(message);
     // The QR bot does not use Pad's DM access policy or identity. Its own
     // enable switch controls reception; protocol echo/empty/system filtering
     // still applies. Pad retain their configured access controls.
@@ -425,22 +430,34 @@ class SingleConnectionService {
   }
 
   async #routeMessage(message) {
+    const binding = await this.#botLinks?.binding(this.#configuredProvider(), message.chatId);
+    message.botBinding = binding ?? null;
     const prefix = this.#config.commandPrefix;
     const text = String(message.text ?? '').trim();
     const command = prefix && text.startsWith(prefix) ? text.slice(prefix.length).trim().toLowerCase() : '';
     if (!message.attachments?.length && ['stop', 'new', 'reset', 'status', 'help'].includes(command.split(/\s+/)[0])) {
+      if (binding) {
+        this.#inbox.cancelChat(message.chatId);
+        if (command === 'stop') { await this.#botLinks.stop(binding); await this.#sendReply(message.chatId, '已请求停止关联会话的工作。'); }
+        else if (command === 'status' || command === 'help') { const target = await this.#botLinks.resolve(binding); await this.#sendReply(message.chatId, `已关联 ${target.name}；/stop 停止工作。解绑请到微信设置操作。`); }
+        else await this.#sendReply(message.chatId, '此聊天已关联 Bot，会话由 Bot 管理；请先在微信设置中解除关联，再新建普通会话。');
+        return;
+      }
       await this.#runCommand(command, message);
       return;
     }
     // Do not yield on an absent question: a following /stop must see and clear
     // the earlier message's batch, rather than racing ahead of its admission.
-    if (!message.attachments?.length && this.#questions?.canAnswer(message) && await this.#questions.answer(message)) return;
+    if (!binding && !message.attachments?.length && this.#questions?.canAnswer(message) && await this.#questions.answer(message)) return;
     const config = chatSettingsFor(resolveConfig(this.#rawConfig), this.#configuredProvider(), message.chatId);
     return this.#inbox.add(message, config.messageMergeDelaySeconds * 1000);
   }
 
   async #submitMessage(message, isCurrent) {
-    const sessionId = await this.#sessionFor(message.chatId, isCurrent);
+    const binding = await this.#botLinks?.binding(this.#configuredProvider(), message.chatId);
+    if (JSON.stringify(binding?.target ?? null) !== JSON.stringify(message.botBinding?.target ?? null)) throw new Error('聊天关联已改变，请重新发送消息。');
+    const linked = binding ? await this.#botLinks.resolve(binding) : null;
+    const sessionId = linked?.sessionId ?? await this.#sessionFor(message.chatId, isCurrent);
     if (!sessionId || !isCurrent()) return;
     const config = chatSettingsFor(resolveConfig(this.#rawConfig), this.#configuredProvider(), message.chatId);
     let prepared = { text: message.text, images: [] };
@@ -459,7 +476,7 @@ class SingleConnectionService {
       } finally { downloads.delete(controller); if (!downloads.size) this.#downloads.delete(message.chatId); }
       if (!isCurrent()) { if (prepared.directory) await rm(prepared.directory, { recursive: true, force: true }); return; }
     }
-    if (config.incomingMessageMode === 'interrupt') {
+    if (!binding && config.incomingMessageMode === 'interrupt') {
       // DSH cancel preserves the pending inbox; do not silently discard queued work.
       await this.#bridge.cancel(sessionId);
       if (!isCurrent()) return;
@@ -470,6 +487,11 @@ class SingleConnectionService {
     const contextCursor = message.groupContextCursor ?? this.#groupContext.cursor();
     const context = message.isGroup
       ? this.#groupContext.snapshot(this.#configuredProvider(), message.chatId, contextCursor) : [];
+    if (binding) {
+      await this.#botLinks.receive(binding, message, { ...prepared, text: withGroupContext(prepared.text, context) });
+      if (context.length) await this.#groupContext.clearThrough(this.#configuredProvider(), message.chatId, contextCursor);
+      return;
+    }
     this.#delivery.trackPrompt(requestId, sessionId, message.chatId);
     const catalog = conversationCatalogFor(this.#ctx, { logger: this.#logger });
     catalog.track(sessionId, requestId, message, prepared);
@@ -593,6 +615,12 @@ class SingleConnectionService {
     return sessionId;
   }
 
+  stopOrdinaryDelivery(chatId) {
+    this.#inbox?.cancelChat(chatId);
+    this.#questions?.cancelChat(chatId);
+    this.#cancelMedia(chatId);
+    for (const [key, turn] of this.#turns) if (turn.chatId === chatId) this.#stopDelivery(key);
+  }
   #deliveryKey(sessionId, turn) { return `${sessionId}:${turn}`; }
   #handleDeliveryEvent(owner, event, number) {
     const turn = this.#ensureDelivery(owner, number);
@@ -948,6 +976,7 @@ class SingleConnectionService {
 /** Each protocol owns its sessions, dedupe, inbox, questions and outbound path.
  * Reconnecting one channel cannot cancel the other channel's active work. */
 export class WechatPadService {
+  #botLinks;
   #notifications = null;
   #options;
   #services = new Map();
@@ -955,15 +984,22 @@ export class WechatPadService {
   #transition = Promise.resolve();
   #disposed = false;
   constructor(options) {
-    this.#options = options;
+    this.#botLinks = new BotLinks({ ctx: options.ctx, directory: dshHomePath('wechatpad'), logger: options.logger, send: (provider, chatId, text) => { const config = this.#readConfig(); return config.enabled && config.enabledProviders.includes(provider) ? this.#get(provider).sendNotification(chatId, text) : { ok: true, delivered: 0 }; } });
+    this.#options = { ...options, botLinks: this.#botLinks };
     this.#config = resolveConfig(options.config);
     const ids = new Set([this.#config.provider, ...this.#config.enabledProviders]);
     for (const provider of ids) {
-      this.#services.set(provider, new SingleConnectionService({ ...options, config: {
+      this.#services.set(provider, new SingleConnectionService({ ...this.#options, config: {
         ...options.config, provider,
         enabled: this.#config.enabled && this.#config.enabledProviders.includes(provider),
       } }));
     }
+  }
+  botLinksView() { return this.#botLinks.view(); }
+  async updateBotLink(payload) {
+    const view = await this.#botLinks.update(payload);
+    this.#services.get(payload.provider)?.stopOrdinaryDelivery(payload.chatId);
+    return view;
   }
   renameConversationGroup(groupKey, name) { return conversationCatalogFor(this.#options.ctx, { logger: this.#options.logger }).renameGroup(groupKey, name); }
   listConversations() { return conversationCatalogFor(this.#options.ctx, { logger: this.#options.logger }).list(); }
@@ -977,18 +1013,20 @@ export class WechatPadService {
     return service;
   }
   async start() {
+    this.#botLinks.start();
     const pending = this.#transition.then(() => Promise.all([...this.#services.values()].map((service) => service.start())));
     this.#transition = pending.catch(() => {});
     await pending;
     if (!this.#disposed && !this.#notifications) this.#notifications = new NotificationRelay({
       ctx: this.#options.ctx,
       config: () => this.#readConfig(),
-      send: (provider, chatId, text) => this.#get(provider).sendNotification(chatId, text),
+      send: (provider, chatId, text) => { const config = this.#readConfig(); return config.enabled && config.enabledProviders.includes(provider) ? this.#get(provider).sendNotification(chatId, text) : { ok: true, delivered: 0 }; },
       logger: this.#options.logger,
     });
   }
   async dispose() {
     this.#disposed = true;
+    await this.#botLinks.dispose();
     this.#notifications?.dispose();
     this.#notifications = null;
     await this.#transition.catch(() => {});

@@ -182,6 +182,8 @@ class PanelFacade {
   listSeenGroups() {
     return this.#getService()?.listSeenGroups() ?? { items: [] };
   }
+  botLinksView() { return this.#readyService().botLinksView(); }
+  updateBotLink(payload) { return this.#readyService().updateBotLink(payload); }
   listConversations() { return this.#getService()?.listConversations() ?? { items: [] }; }
   renameConversationGroup(groupKey, name) { return this.#readyService().renameConversationGroup(groupKey, name); }
 

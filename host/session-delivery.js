@@ -3,6 +3,7 @@ import { outboundArtifactRegistry } from './vendor/artifact.js';
 
 export class SessionDelivery {
   #catalog;
+  #allowOwner;
   #provider;
   #onEvent;
   #onCancel;
@@ -17,6 +18,7 @@ export class SessionDelivery {
   constructor({
     ctx,
     catalog,
+    allowOwner = () => true,
     provider,
     onEvent,
     onCancel,
@@ -24,6 +26,7 @@ export class SessionDelivery {
     registry = outboundArtifactRegistry,
   }) {
     this.#catalog = catalog;
+    this.#allowOwner = allowOwner;
     this.#provider = provider;
     this.#onEvent = onEvent;
     this.#onCancel = onCancel;
@@ -69,7 +72,7 @@ export class SessionDelivery {
   #owner(id) {
     if (this.#disposed || typeof id !== 'string') return null;
     const owner = this.#catalog.owner(id);
-    return owner?.provider === this.#provider ? owner : null;
+    return owner?.provider === this.#provider && this.#allowOwner(owner) ? owner : null;
   }
   #state(owner, turn) {
     if (!Number.isInteger(turn) || turn < 0) return null;

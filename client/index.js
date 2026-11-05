@@ -17,6 +17,7 @@
  */
 import * as React from 'react';
 import { createPortal } from 'react-dom';
+import { BotLinksPanel } from './bot-links-panel.js';
 import { installConversationGroups } from './conversation-groups.js';
 
 // Connection composes the request URL as `${channel}/${endpoint}`, so the
@@ -533,6 +534,7 @@ function TabBar({ tabs, active, t, onSelect }) {
  */
 export function WechatPadSettings({ t, connection, locale }) {
   useSectionStyles();
+  const botCall = React.useCallback((method, payload) => callRpc(connection, method, payload), [connection]);
   const [model, setModel] = React.useState(null);
   const [status, setStatus] = React.useState(null);
   const [seenGroups, setSeenGroups] = React.useState([]);
@@ -956,6 +958,7 @@ export function WechatPadSettings({ t, connection, locale }) {
   };
 
   const sessionPanel = () => h('div', { className: 'wxp-tabpanel', role: 'tabpanel', id: 'wxp-panel-session', 'aria-labelledby': 'wxp-tab-session' },
+    h(BotLinksPanel, { call: botCall }),
     h('section', { className: 'wxp-card' },
       h('div', { className: 'wxp-cardHead' }, h('span', { className: 'wxp-cardTitle' }, t('session'))),
       h('div', { className: 'wxp-grid' },
