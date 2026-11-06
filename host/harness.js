@@ -151,7 +151,14 @@ export class HarnessBridge {
 
   /** Cancel one running turn without dropping the pending inbox. */
   async cancel(sessionId) {
-    return this.invoke('session', 'cancel', { request: { sessionId } });
+    try { return await this.invoke('session', 'cancel', { request: { sessionId } }); }
+    catch (error) {
+      // The Host cancels only attached Agents. After a restart a stored Session
+      // has no live turn to cancel; prompt itself resumes that same Session.
+      if (error.code === 'session/not-found' && /not attached/.test(error.message)
+        && error.details?.sessionId === sessionId) return { accepted: true };
+      throw error;
+    }
   }
 
   /**

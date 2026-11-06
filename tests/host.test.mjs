@@ -350,3 +350,18 @@ test('OneBot feed accepts standard messages and meta events', () => {
   assert.equal(unwrapPadFrame({type: 'message', wxid: 'bot', message: {}}), null);
   assert.equal(unwrapPadFrame(null), null);
 });
+
+test('interrupting an unattached stored Session resumes it without replacing history', async () => {
+  const calls = [];
+  const bridge = new HarnessBridge({ peer: {}, gateway: { invoke: async request => {
+    calls.push(request);
+    if (request.method === 'cancel') throw Object.assign(new Error('session "stored" not found (not attached)'), {code: 'session/not-found', details: {sessionId: 'stored'}});
+    return {accepted: true};
+  } } });
+  assert.deepEqual(await bridge.cancel('stored'), {accepted: true});
+  await bridge.prompt({sessionId: 'stored', text: 'continue'});
+  assert.deepEqual(calls.map(c => c.method), ['cancel','prompt']);
+  assert.equal(calls[1].args.request.sessionId, 'stored');
+  const broken = new HarnessBridge({peer: {}, gateway: {invoke: async () => {throw Object.assign(new Error('denied'), {code: 'gateway/forbidden'});}}});
+  await assert.rejects(() => broken.cancel('stored'), /denied/);
+});

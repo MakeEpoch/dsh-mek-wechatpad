@@ -1,6 +1,6 @@
 {
   "name": "dsh-mek-wechatpad",
-  "version": "0.1.11",
+  "version": "0.1.12",
   "description": "WechatPad \u00b7 \u628a\u5fae\u4fe1\uff08WechatPad / iLink\uff09\u63a5\u5165 DeepSeek dsh\uff1a\u8bbe\u7f6e\u9762\u677f\u914d\u7f6e\uff0c\u5fae\u4fe1\u6d88\u606f\u9a71\u52a8\u771f\u5b9e dsh \u4f1a\u8bdd",
   "type": "module",
   "main": "./host/index.js",
