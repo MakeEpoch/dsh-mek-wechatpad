@@ -9,6 +9,7 @@
  * 本模块只做协议层：不落盘、不管会话、不引第三方依赖，fetch 可注入便于测试。
  */
 import { createCipheriv, createHash, randomBytes, randomUUID } from 'node:crypto';
+import { setTimeout as delay } from 'node:timers/promises';
 
 /** 扫码登录固定入口。 */
 export const WEIXIN_QR_BASE_URL = 'https://ilinkai.weixin.qq.com/';
@@ -47,6 +48,49 @@ const LOGIN_STATUSES = new Set([
 ]);
 /** 这些错误码表示网络层没拿到确定结果，重发可能造成重复消息。 */
 const UNCERTAIN_CODES = new Set(['network-error', 'timeout', 'invalid-response']);
+
+function networkCode(error, depth = 0) {
+  if (!error || depth > 5) return undefined;
+  if (/^(?:E[A-Z0-9_]{2,40}|UND_ERR_[A-Z_]{2,50}|CERT_[A-Z_]{2,50}|ERR_TLS_[A-Z_]{2,50})$/.test(error.code ?? '')) return error.code;
+  return networkCode(error.cause, depth + 1) ?? (Array.isArray(error.errors) ? error.errors.map(item => networkCode(item, depth + 1)).find(Boolean) : undefined);
+}
+
+async function artifactStage(stage, signal, work) {
+  try { return await work(); }
+  catch (error) {
+    if (signal?.aborted) throw abortError(signal);
+    const code = error instanceof WeixinApiError ? error.code : 'internal-error';
+    const uncertain = stage === 'sendmessage' && (UNCERTAIN_CODES.has(code)
+      || (code === 'http-error' && error.status >= 500));
+    const label = { getuploadurl: '申请附件上传地址失败', upload: '附件上传失败', sendmessage: '附件消息发送失败' }[stage];
+    const detail = error instanceof WeixinApiError ? `${error.message}${error.providerCode ? `（${error.providerCode}）` : ''}` : '微信附件处理失败。';
+    const causeCode = networkCode(error);
+    const failure = new WeixinApiError(code, uncertain
+      ? `附件已上传，但微信发送结果未确认，请先在微信核对，避免重复发送。${causeCode ? `（${causeCode}）` : ''}`
+      : `${label}：${detail}${causeCode ? `（${causeCode}）` : ''}`, {
+      cause: error, status: error.status, providerCode: error.providerCode, durationMs: error.durationMs,
+    });
+    failure.stage = stage;
+    failure.networkCode = causeCode;
+    failure.deliveryUncertain = uncertain;
+    throw failure;
+  }
+}
+
+// Negotiating an upload cannot send a chat message. Reuse its exact file key;
+// retry only transient transport/5xx failures, never the final sendmessage.
+async function requestUpload(fetchImpl, options) {
+  for (let attempt = 0; ; attempt++) {
+    try { return await requestJson(fetchImpl, options); }
+    catch (error) {
+      if (options.signal?.aborted) throw abortError(options.signal);
+      const transient = ['network-error', 'timeout'].includes(error.code)
+        || (error.code === 'http-error' && [502, 503, 504].includes(error.status));
+      if (attempt >= 2 || !transient) throw error;
+      await delay(250 * (attempt + 1), undefined, { signal: options.signal });
+    }
+  }
+}
 
 /**
  * 协议层错误。`code` 是稳定的分类，调用方可据此决定是否重试/是否提示重新登录。
@@ -548,32 +592,34 @@ export function createWeixinApi({ fetchImpl = fetch, uploadFetchImpl = fetchImpl
     signal?.throwIfAborted();
     const fileKey = randomBytes(16).toString('hex');
     const aesKey = randomBytes(16);
-    const upload = await requestJson(fetchImpl, {
-      method: 'POST',
-      baseUrl,
-      endpoint: 'ilink/bot/getuploadurl',
-      token,
-      signal,
-      body: {
-        filekey: fileKey,
-        media_type: mediaType,
-        to_user_id: recipient,
-        rawsize: file.bytes.byteLength,
-        rawfilemd5: createHash('md5').update(file.bytes).digest('hex'),
-        filesize: aesEcbPaddedSize(file.bytes.byteLength),
-        no_need_thumb: true,
-        aeskey: aesKey.toString('hex'),
-        base_info: baseInfo(),
-      },
-    });
-    const uploadRejection = rejectedProviderResponse(upload);
-    if (uploadRejection) {
-      throw new WeixinApiError('upload-url-rejected', '微信服务拒绝了文件上传请求。', {
-        providerCode: uploadRejection,
+    const uploadUrl = await artifactStage('getuploadurl', signal, async () => {
+      const upload = await requestUpload(fetchImpl, {
+        method: 'POST',
+        baseUrl,
+        endpoint: 'ilink/bot/getuploadurl',
+        token,
+        signal,
+        body: {
+          filekey: fileKey,
+          media_type: mediaType,
+          to_user_id: recipient,
+          rawsize: file.bytes.byteLength,
+          rawfilemd5: createHash('md5').update(file.bytes).digest('hex'),
+          filesize: aesEcbPaddedSize(file.bytes.byteLength),
+          no_need_thumb: true,
+          aeskey: aesKey.toString('hex'),
+          base_info: baseInfo(),
+        },
       });
-    }
-    const uploadUrl = weixinCdnUploadUrl(upload, fileKey);
-    const downloadParam = await uploadWeixinCdn(uploadFetchImpl, uploadUrl, file.bytes, aesKey, { signal });
+      const uploadRejection = rejectedProviderResponse(upload);
+      if (uploadRejection) {
+        throw new WeixinApiError('upload-url-rejected', '微信服务拒绝了文件上传请求。', {
+          providerCode: uploadRejection,
+        });
+      }
+      return weixinCdnUploadUrl(upload, fileKey);
+    });
+    const downloadParam = await artifactStage('upload', signal, () => uploadWeixinCdn(uploadFetchImpl, uploadUrl, file.bytes, aesKey, { signal }));
     signal?.throwIfAborted();
 
     const media = {
@@ -586,30 +632,32 @@ export function createWeixinApi({ fetchImpl = fetch, uploadFetchImpl = fetchImpl
     const item = itemType === 2
       ? { type: 2, image_item: { media, mid_size: ciphertextSize } }
       : { type: 4, file_item: { media, file_name: file.fileName, len: String(file.bytes.byteLength) } };
-    const response = await requestJson(fetchImpl, {
-      method: 'POST',
-      baseUrl,
-      endpoint: 'ilink/bot/sendmessage',
-      token,
-      signal,
-      body: {
-        msg: {
-          from_user_id: '',
-          to_user_id: recipient,
-          client_id: clientId,
-          message_type: 2,
-          message_state: 2,
-          item_list: [item],
-          ...(nonEmptyString(contextToken) ? { context_token: contextToken.trim() } : {}),
-          ...(nonEmptyString(runId) ? { run_id: runId.trim() } : {}),
+    await artifactStage('sendmessage', signal, async () => {
+      const response = await requestJson(fetchImpl, {
+        method: 'POST',
+        baseUrl,
+        endpoint: 'ilink/bot/sendmessage',
+        token,
+        signal,
+        body: {
+          msg: {
+            from_user_id: '',
+            to_user_id: recipient,
+            client_id: clientId,
+            message_type: 2,
+            message_state: 2,
+            item_list: [item],
+            ...(nonEmptyString(contextToken) ? { context_token: contextToken.trim() } : {}),
+            ...(nonEmptyString(runId) ? { run_id: runId.trim() } : {}),
+          },
+          base_info: baseInfo(),
         },
-        base_info: baseInfo(),
-      },
+      });
+      const sendRejection = rejectedProviderResponse(response);
+      if (sendRejection) {
+        throw new WeixinApiError('send-rejected', '微信服务拒绝了文件消息。', { providerCode: sendRejection });
+      }
     });
-    const sendRejection = rejectedProviderResponse(response);
-    if (sendRejection) {
-      throw new WeixinApiError('send-rejected', '微信服务拒绝了文件消息。', { providerCode: sendRejection });
-    }
     return { messageId: clientId, providerMessageIds: [clientId] };
   }
 

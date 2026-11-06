@@ -311,6 +311,20 @@ class SingleConnectionService {
     if (!this.#config.enabled || !this.#connectionStarted) return { ok: false, error: '通知连接未启用' };
     return this.#sendReply(chatId, text);
   }
+
+  async sendAttachment(chatId, file, { signal } = {}) {
+    const connection = this.#connection;
+    const lifetime = this.#mediaLifetime.signal;
+    const combined = AbortSignal.any([lifetime, ...(signal ? [signal] : [])]);
+    const result = await this.#enqueueSend(chatId, async () => {
+      combined.throwIfAborted();
+      if (this.#disposed || this.#connection !== connection) throw new Error('连接已停止');
+      if (typeof connection?.sendFile !== 'function') throw new Error('当前连接未支持附件发送');
+      return connection.sendFile({ chatId, file, signal: combined });
+    });
+    if (result?.ok) this.#state.messagesOut += result.delivered ?? 1;
+    return result;
+  }
   #cancelMedia(chatId) {
     for (const controller of this.#downloads.get(chatId) ?? []) controller.abort();
     this.#downloads.delete(chatId);
@@ -1003,7 +1017,7 @@ export class WechatPadService {
       logger: options.logger,
     });
     this.#chatDirectory = new ChatDirectory(dshHomePath('wechatpad'));
-    this.#botLinks = new BotLinks({ typing: this.#typingSignals, ctx: options.ctx, directory: dshHomePath('wechatpad'), logger: options.logger, send: (provider, chatId, text) => { const config = this.#readConfig(); return config.enabled && config.enabledProviders.includes(provider) ? this.#get(provider).sendNotification(chatId, text) : { ok: true, delivered: 0 }; } });
+    this.#botLinks = new BotLinks({ typing: this.#typingSignals, ctx: options.ctx, directory: dshHomePath('wechatpad'), logger: options.logger, sendFile: (provider, chatId, file, options) => { const config = this.#readConfig(); if (!config.enabled || !config.enabledProviders.includes(provider)) throw new Error('微信连接已关闭'); return this.#get(provider).sendAttachment(chatId, file, options); }, send: (provider, chatId, text) => { const config = this.#readConfig(); return config.enabled && config.enabledProviders.includes(provider) ? this.#get(provider).sendNotification(chatId, text) : { ok: true, delivered: 0 }; } });
     this.#options = { ...options, typingSignals: this.#typingSignals, botLinks: this.#botLinks, onChat: (provider, message) => this.#chatDirectory.note(provider, message) };
     this.#config = resolveConfig(options.config);
     this.botLinkSettings = createBotLinkSettings({

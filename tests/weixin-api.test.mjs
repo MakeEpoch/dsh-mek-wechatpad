@@ -661,3 +661,80 @@ test('WeixinAccountState：remove 清空文件与内存状态', async () => {
   await state.remove();
   assert.throws(() => new WeixinAccountState(''), TypeError);
 });
+
+const artifactRequest = () => ({ baseUrl: BASE, token: 'private-token', toUserId: 'private-peer', contextToken: 'private-context', file: { fileName: 'fixture.png', bytes: Buffer.from('synthetic media') } });
+const reset = () => new TypeError('https://private.invalid/?token=private-token', { cause: Object.assign(new Error('private-context'), { code: 'ECONNRESET' }) });
+function mediaWire({ negotiate, send, upload } = {}) {
+  const calls = { negotiate: [], send: [], upload: [] };
+  return { calls,
+    fetchImpl: async (url, init) => {
+      const kind = new URL(url).pathname.endsWith('/getuploadurl') ? 'negotiate' : 'send';
+      calls[kind].push(JSON.parse(init.body));
+      if (kind === 'negotiate') return negotiate?.(calls.negotiate.length) ?? Response.json({ ret: 0, upload_param: 'private-upload' });
+      return send?.(calls.send.length) ?? Response.json({ ret: 0 });
+    },
+    uploadFetchImpl: async (url, init) => {
+      const chunks = []; for await (const chunk of init.body) chunks.push(Buffer.from(chunk));
+      calls.upload.push(Buffer.concat(chunks));
+      return upload?.() ?? new Response('', { headers: { 'x-encrypted-param': 'private-download' } });
+    },
+  };
+}
+
+test('media upload negotiation recovers a dropped connection with the same metadata, then sends only once', async () => {
+  for (const method of ['sendImage', 'sendFile']) {
+    const wire = mediaWire({ negotiate: n => { if (n === 1) throw reset(); } });
+    await createWeixinApi(wire)[method](artifactRequest());
+    assert.equal(wire.calls.negotiate.length, 2);
+    assert.deepEqual(wire.calls.negotiate[0], wire.calls.negotiate[1]);
+    assert.equal(wire.calls.upload.length, 1);
+    assert.equal(wire.calls.send.length, 1);
+  }
+});
+
+test('media negotiation has a finite retry budget and safe stage/network diagnostics', async () => {
+  const wire = mediaWire({ negotiate: () => { throw reset(); } });
+  await assert.rejects(createWeixinApi(wire).sendImage(artifactRequest()), error => {
+    assert.equal(error.stage, 'getuploadurl'); assert.equal(error.networkCode, 'ECONNRESET');
+    assert.equal(error.deliveryUncertain, false); assert.match(error.message, /申请附件上传地址失败/);
+    assert.doesNotMatch(error.message, /private|https|token|context/); return true;
+  });
+  assert.equal(wire.calls.negotiate.length, 3); assert.equal(wire.calls.upload.length, 0); assert.equal(wire.calls.send.length, 0);
+});
+
+test('media negotiation retries 503 but never retries a permanent 403 or provider refusal', async () => {
+  const transient = mediaWire({ negotiate: n => n === 1 ? new Response('', { status: 503 }) : undefined });
+  await createWeixinApi(transient).sendFile(artifactRequest()); assert.equal(transient.calls.negotiate.length, 2);
+  for (const reply of [() => new Response('', { status: 403 }), () => Response.json({ ret: -14 })]) {
+    const wire = mediaWire({ negotiate: reply });
+    await assert.rejects(createWeixinApi(wire).sendImage(artifactRequest()));
+    assert.equal(wire.calls.negotiate.length, 1); assert.equal(wire.calls.send.length, 0);
+  }
+});
+
+test('cancelling media negotiation stops retry backoff and does not upload or send', async () => {
+  const controller = new AbortController();
+  const wire = mediaWire({ negotiate: () => { setTimeout(() => controller.abort(), 30); throw reset(); } });
+  await assert.rejects(createWeixinApi(wire).sendImage({ ...artifactRequest(), signal: controller.signal }), { name: 'AbortError' });
+  assert.equal(wire.calls.negotiate.length, 1); assert.equal(wire.calls.upload.length, 0); assert.equal(wire.calls.send.length, 0);
+});
+
+test('media final-send transport errors report unknown delivery and never resend or renegotiate', async () => {
+  const wire = mediaWire({ send: () => { throw reset(); } });
+  await assert.rejects(createWeixinApi(wire).sendImage(artifactRequest()), error => {
+    assert.equal(error.stage, 'sendmessage'); assert.equal(error.deliveryUncertain, true);
+    assert.equal(error.networkCode, 'ECONNRESET'); assert.match(error.message, /发送结果未确认/);
+    assert.doesNotMatch(error.message, /private|https|token|context/); return true;
+  });
+  assert.equal(wire.calls.negotiate.length, 1); assert.equal(wire.calls.upload.length, 1); assert.equal(wire.calls.send.length, 1);
+});
+
+test('media CDN failures identify upload separately and never call sendmessage', async () => {
+  const wire = mediaWire({ upload: () => { throw reset(); } });
+  await assert.rejects(createWeixinApi(wire).sendImage(artifactRequest()), error => {
+    assert.equal(error.stage, 'upload'); assert.equal(error.deliveryUncertain, false);
+    assert.match(error.message, /附件上传失败/); assert.match(error.message, /ECONNRESET/);
+    assert.doesNotMatch(error.message, /private|https|token|context/); return true;
+  });
+  assert.equal(wire.calls.upload.length, 1); assert.equal(wire.calls.send.length, 0);
+});

@@ -37,7 +37,7 @@ export class SessionDelivery {
       ctx.on(
         'agent/inbox/claimed',
         ({ agent, message, turn }) => {
-          const owner = this.#owner(agent?.session?.id);
+          const owner = this.#owner(agent?.session?.id, message?.source?.rpcId);
           if (owner) this.#claim(owner, message, turn);
         },
         { global: true, prepend: true },
@@ -63,15 +63,17 @@ export class SessionDelivery {
       ),
     );
   }
-  trackPrompt(requestId, sessionId, chatId) {
-    this.#pending.set(requestId, { sessionId, chatId });
+  trackPrompt(requestId, sessionId, chatId, owner) {
+    this.#pending.set(requestId, { sessionId, chatId, owner });
   }
   forgetPrompt(requestId) {
     this.#pending.delete(requestId);
   }
-  #owner(id) {
+  #owner(id, rpcId) {
     if (this.#disposed || typeof id !== 'string') return null;
-    const owner = this.#catalog.owner(id);
+    const pending = this.#pending.get(rpcId);
+    const owner = (pending?.sessionId === id ? pending.owner : null)
+      ?? this.#catalog.owner(id) ?? this.#states.get(id)?.owner;
     return owner?.provider === this.#provider && this.#allowOwner(owner) ? owner : null;
   }
   #state(owner, turn) {
@@ -95,6 +97,10 @@ export class SessionDelivery {
   #claim(owner, message, turn) {
     const state = this.#state(owner, turn);
     if (!state || state.blocked || state.ending) return;
+    if (state.owner.chatId !== owner.chatId) {
+      this.#cancel(state);
+      return;
+    }
     const source = message?.source;
     const pending = this.#pending.get(source?.rpcId);
     const manual =
@@ -108,11 +114,12 @@ export class SessionDelivery {
       this.#cancel(state);
       return;
     }
+    if (owner.linked && source?.kind === 'schedule') { this.#cancel(state); return; }
     if (!manual && source?.kind !== 'schedule') return;
     if (manual) state.rpcIds.add(source.rpcId);
     if (!state.allowed) {
       state.allowed = true;
-      state.close = this.#registry.openTurnConsumer(owner.sessionId, turn);
+      state.close = this.#registry.openTurnConsumer(owner.sessionId, turn, { provider: owner.connectionProvider ?? this.#provider });
       this.#onEvent(owner, { type: 'turn/start', data: { turn } }, turn);
       this.#logger(
         'info',
@@ -121,14 +128,14 @@ export class SessionDelivery {
     }
   }
   #observe(session, event) {
-    const owner = this.#owner(session?.id);
+    const owner = this.#owner(session?.id, event?.data?.source?.rpcId);
     if (!owner || !event) return;
     if (Number.isSafeInteger(event.seq)) {
       if (event.seq <= (this.#seen.get(owner.sessionId) ?? -1)) return;
       this.#seen.set(owner.sessionId, event.seq);
     }
     if (event.type === 'turn/start') {
-      this.#state(owner, event.data?.turn);
+      if (!owner.linked) this.#state(owner, event.data?.turn);
       return;
     }
     if (event.type === 'user/message') {

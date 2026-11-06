@@ -307,7 +307,7 @@ export class OutboundArtifactRegistry {
    * Bind one channel delivery consumer to the Turn its request starts.
    * Only this consumer can retain files for delivery after the Turn ends.
    */
-  openConsumer(sessionId, promptRpcId) {
+  openConsumer(sessionId, promptRpcId, { provider } = {}) {
     if (typeof sessionId !== 'string' || !sessionId
       || typeof promptRpcId !== 'string' || !promptRpcId) {
       throw new TypeError('sessionId and promptRpcId are required');
@@ -316,6 +316,7 @@ export class OutboundArtifactRegistry {
     const consumer = {
       sessionId,
       promptRpcId,
+      provider,
       turn: null,
       released: false,
     };
@@ -339,10 +340,10 @@ export class OutboundArtifactRegistry {
   }
 
   /** A trusted channel router grants delivery for a claimed user/schedule Turn. */
-  openTurnConsumer(sessionId, turn) {
+  openTurnConsumer(sessionId, turn, metadata) {
     if (!Number.isInteger(turn) || turn < 0) throw new TypeError('turn is required');
     const rpcId = `wechatpad-turn:${turn}`;
-    const close = this.openConsumer(sessionId, rpcId);
+    const close = this.openConsumer(sessionId, rpcId, metadata);
     this.#openTurns.set(sessionId, turn);
     this.#bindConsumer(sessionId, rpcId, turn);
     return close;
@@ -419,6 +420,10 @@ export class OutboundArtifactRegistry {
     const turn = this.#currentTurn(session);
     return Number.isInteger(turn)
       && this.#consumerForTurn(sessionIdOf(session), turn) !== null;
+  }
+
+  deliveryProvider(session) {
+    return this.#consumerForTurn(sessionIdOf(session), this.#currentTurn(session))?.provider;
   }
 
   /** A disposed Session cannot have another channel consumer claim its files. */
@@ -783,7 +788,7 @@ export function installOutboundArtifactTool(ctx, { registry = outboundArtifactRe
       order: 115,
       required: true,
       text: (assembly) => registry.hasActiveConsumer(assembly?.agent?.session)
-        ? `This turn replies to a WeChat conversation. To send an image or file, call ${OUTBOUND_ARTIFACT_TOOL}({"path":"/absolute/path/to/file"}), or the host present tool. Both queue real attachments; use only one for each file. A Markdown image or a path in prose alone is not confirmation of delivery. Existing files can be sent directly. Files are sent after your turn finishes: say prepared or queued, never sent or received. The channel reports failures separately.`
+        ? `This turn replies to a WeChat conversation. To send an image or file, call ${OUTBOUND_ARTIFACT_TOOL}({"path":"/absolute/path/to/file"}), or the host present tool. Both queue real attachments; use only one for each file. A Markdown image or a path in prose alone is not confirmation of delivery. Existing files can be sent directly. Files are sent after your turn finishes: say prepared or queued, never sent or received. The channel reports failures separately. ${registry.deliveryProvider(assembly?.agent?.session) === 'weixin' ? 'This connection sends audio as a file, not a native WeChat voice bubble.' : 'WechatPad sends supported audio up to 60 seconds as native voice; longer audio is sent as a file.'}`
         : '',
     }); } catch (error) { stopTool?.(); throw error; }
     ctx.effect?.(() => () => { stopContext?.(); stopTool?.(); }, 'wechatpad: scoped attachment tool');
