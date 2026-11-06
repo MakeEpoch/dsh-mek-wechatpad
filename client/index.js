@@ -273,13 +273,11 @@ const EN = {
   baseUrl: '服务地址',
   baseUrlHint: '例如 http://127.0.0.1:8062',
   token: '访问 Token',
-  tokenHint: '填写服务端 WECHAT_BRIDGE_TOKEN',
+  tokenHint: '填写服务端 ONEBOT_ACCESS_TOKEN',
   tokenSaved: '已设置，留空保留',
   wxid: '机器人 wxid',
   wxidHint: '填写已登录机器人的 wxid，一个连接对应一个账号。',
-  padConnectionHint: '连接 wechatReal08，通过 WebSocket 接收消息。后台 Webhook 独立投递。',
-  clientId: '客户端标识',
-  clientIdHint: '同一服务的每个消费者使用不同标识，默认 dsh。',
+  padConnectionHint: '连接 wechatReal08，通过 OneBot v12 WebSocket 接收消息。后台 Webhook 独立投递。',
   requestTimeout: '请求超时（秒）',
   test: '检测连接',
   testOk: '连接正常',
@@ -630,8 +628,8 @@ export function WechatPadSettings({ t, connection, locale }) {
   const dirty = Object.keys(changed).length > 0 || Boolean(tokenDraft.trim())
     || JSON.stringify(toList(users)) !== JSON.stringify(base.allowedUsers ?? [])
     || JSON.stringify(toList(groups)) !== JSON.stringify(base.allowedGroups ?? []);
-  const connectionFields = ['enabledProviders', 'baseUrl', 'wxid', 'clientId', 'requestTimeoutSeconds', 'weixinBotType', 'weixinAccountFile'];
-  const padDirty = ['baseUrl', 'wxid', 'clientId', 'requestTimeoutSeconds'].some((field) => Object.hasOwn(changed, field)) || Boolean(tokenDraft.trim()) || enabled('pad') !== savedProviders.includes('pad');
+  const connectionFields = ['enabledProviders', 'baseUrl', 'wxid', 'requestTimeoutSeconds', 'weixinBotType', 'weixinAccountFile'];
+  const padDirty = ['baseUrl', 'wxid', 'requestTimeoutSeconds'].some((field) => Object.hasOwn(changed, field)) || Boolean(tokenDraft.trim()) || enabled('pad') !== savedProviders.includes('pad');
   const weixinDirty = ['weixinBotType', 'weixinAccountFile'].some((field) => Object.hasOwn(changed, field)) || enabled('weixin') !== savedProviders.includes('weixin');
   const channelDirty = activeProvider === 'weixin' ? weixinDirty : padDirty;
   const connectionDirty = connectionFields.some((field) => Object.hasOwn(changed, field)) || Boolean(tokenDraft.trim());
@@ -862,9 +860,7 @@ export function WechatPadSettings({ t, connection, locale }) {
       h('summary', null, t('advanced')),
       h('div', { className: 'wxp-grid' },
         h(Field, { label: t('requestTimeout') },
-          h('input', { type: 'number', min: 5, max: 120, value: values.requestTimeoutSeconds ?? 20, name: 'requestTimeoutSeconds', ...bindText(set, 'requestTimeoutSeconds', Number) })),
-        h(Field, { label: t('clientId'), hint: t('clientIdHint') },
-          h('input', { type: 'text', value: values.clientId ?? 'dsh', spellCheck: false, name: 'clientId', ...bindText(set, 'clientId') })))));
+          h('input', { type: 'number', min: 5, max: 120, value: values.requestTimeoutSeconds ?? 20, name: 'requestTimeoutSeconds', ...bindText(set, 'requestTimeoutSeconds', Number) })))));
 
   const weixinPanel = () => {
     const state = login?.state ?? 'wait';

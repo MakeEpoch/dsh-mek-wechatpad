@@ -1,3 +1,4 @@
+import { eventFromNative, actionReply, fakeProviderHttp } from './onebot-fixture.mjs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import test, { describe } from 'node:test';
 import assert from 'node:assert/strict';
@@ -35,20 +36,8 @@ async function until(predicate) {
 for (const isGroup of [false, true]) {
   test(`questions wiring: ${isGroup ? 'group reply without another @' : 'DM'} answers the pending tool, not a new prompt`, async (t) => {
     const sent = [];
-    const server = createServer(async (request, response) => {
-      if (request.method === 'POST') {
-        const chunks = [];
-        for await (const chunk of request) chunks.push(chunk);
-        assert.equal(new URL(request.url, 'http://bridge').searchParams.has('key'), false);
-        sent.push(...JSON.parse(Buffer.concat(chunks).toString()).MsgItem);
-        response.setHeader('content-type', 'application/json');
-        response.end(JSON.stringify({ Code: 200, Data: { isSendSuccess: true, newMsgId: String(sent.length) } }));
-      } else {
-        response.setHeader('content-type', 'application/json');
-        response.end(JSON.stringify({ accounts: [] }));
-      }
-    });
-    const sockets = new WebSocketServer({ server, path: '/ws/outbound' });
+    const server = createServer((request, response) => { void fakeProviderHttp(request, response, sent); });
+  const sockets = new WebSocketServer({ server, path: '/' });
     let service;
     t.after(async () => {
       await service?.dispose();
@@ -115,7 +104,7 @@ for (const isGroup of [false, true]) {
         msg_type: 1, new_msg_id: id,
         msg_source: mentioned ? '<msgsource><atuserlist>wxid_bot</atuserlist></msgsource>' : '',
       };
-      for (const socket of sockets.clients) socket.send(JSON.stringify({ type: 'message', wxid: 'wxid_bot', message }));
+      for (const socket of sockets.clients) socket.send(JSON.stringify(eventFromNative('wxid_bot', message)));
     }
     push('initial', '1', isGroup);
     await until(() => sent.length === 1);

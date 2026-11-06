@@ -1,3 +1,4 @@
+import { eventFromNative, actionReply, fakeProviderHttp } from './onebot-fixture.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
@@ -29,15 +30,8 @@ async function fixture(t, { legacyFile, groupConfig = {} } = {}) {
   const sent = [],
     calls = [],
     prompts = [];
-  const server = createServer(async (request, response) => {
-    response.setHeader('content-type', 'application/json');
-    if (request.method !== 'POST') return response.end('{"accounts":[]}');
-    const chunks = [];
-    for await (const chunk of request) chunks.push(chunk);
-    sent.push(...JSON.parse(Buffer.concat(chunks).toString()).MsgItem);
-    response.end('{"Code":200,"Data":{"isSendSuccess":true}}');
-  });
-  const sockets = new WebSocketServer({ server, path: '/ws/outbound' });
+  const server = createServer((request, response) => { void fakeProviderHttp(request, response, sent); });
+  const sockets = new WebSocketServer({ server, path: '/' });
   let service;
   t.after(async () => {
     await service?.dispose();
@@ -120,17 +114,17 @@ async function fixture(t, { legacyFile, groupConfig = {} } = {}) {
     };
     for (const socket of sockets.clients)
       if (socket.readyState === 1)
-        socket.send(JSON.stringify({ type: 'message', wxid: 'bot', message }));
+        socket.send(JSON.stringify(eventFromNative('bot', message)));
   };
   const pushGroup = (chatId, sender, text, atUsers = []) => {
     const message = {
       from_user_name: { str: chatId }, to_user_name: { str: 'bot' },
       content: { str: `${sender}:\n${text}` }, msg_type: 1,
-      new_msg_id: String(++id), AtWxIDList: atUsers,
+      new_msg_id: String(++id), msg_source: `<msgsource><atuserlist><![CDATA[${atUsers.join(",")}]]></atuserlist></msgsource>`,
     };
     for (const socket of sockets.clients)
       if (socket.readyState === 1)
-        socket.send(JSON.stringify({ type: 'message', wxid: 'bot', message }));
+        socket.send(JSON.stringify(eventFromNative('bot', message)));
   };
   return {
     sent,

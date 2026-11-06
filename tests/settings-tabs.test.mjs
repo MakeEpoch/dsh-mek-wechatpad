@@ -291,9 +291,9 @@ assert.equal(tabButton('pad').getAttribute('aria-selected'), 'true');
 // Only mode-specific fields are shown; advanced defaults are collapsed.
 assert.equal(container.querySelector('select[name=connectionMode]'), null);
 assert.equal(container.querySelector('select[name=receiveMode]'), null);
-for (const field of ['baseUrl', 'token', 'wxid', 'clientId']) assert.ok(container.querySelector(`input[name=${field}]`));
+for (const field of ['baseUrl', 'token', 'wxid']) assert.ok(container.querySelector(`input[name=${field}]`));
 for (const field of ['bridgeBaseUrl', 'bridgeToken', 'bridgeAccounts', 'key', 'apiPrefix', 'webhookPath']) assert.equal(container.querySelector(`input[name=${field}]`), null);
-assert.ok(container.querySelector('input[name=clientId]').closest('details:not([open])'));
+assert.equal(container.querySelector('input[name=clientId]'), null);
 await typeInto(container.querySelector('input[name=baseUrl]'), 'http://127.0.0.1:9000');
 await click(tabButton('session'));
 await click(tabButton('pad'));

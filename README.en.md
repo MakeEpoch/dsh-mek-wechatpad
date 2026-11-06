@@ -17,7 +17,7 @@ npm run install:dsh:web                # install into the web profile
 
 Restart `dsh web`, reload the page, then open **Settings → WeChat**:
 
-1. Enable WechatPad and enter the service URL (port 8062), access token (`WECHAT_BRIDGE_TOKEN` on the server), and one logged-in bot wxid.
+1. Enable WechatPad and enter the service URL (port 8062), access token (`ONEBOT_ACCESS_TOKEN` on the server), and one logged-in bot wxid.
 2. Save, then press **Test connection** to check the saved API configuration.
 3. WechatPad direct messages default to an allowlist. Add their permitted wxids or select a different policy. The QR bot does not use this allowlist.
 4. Save; the plugin reloads with the new configuration and the next WeChat message starts a Session.
@@ -32,9 +32,9 @@ Legacy profiles retain their existing `provider`. `enabledProviders: [pad, weixi
 
 ## WechatPad connection
 
-The plugin receives through `/ws/outbound` and sends through `/proxy/{wxid}/...`, using the same service token. Client ID defaults to `dsh` and lives under Advanced; each consumer needs a distinct ID. Server Webhook delivery remains independent. WS is live fan-out without offline replay.
+The Pad connection uses OneBot v12: WebSocket events and HTTP actions share `/`, authenticate with a Bearer token, and select the bot through `self`. Server Webhook delivery remains independent. WS is live fan-out without offline replay. See [ONEBOT_V12.md](docs/ONEBOT_V12.md).
 
-On upgrade from 0.1.6, migrate connection settings once to `baseUrl`, `token`, `wxid`, `clientId`, then remove the old receive mode, key, API prefix, callback and `bridge*` settings. Runtime aliases are intentionally absent. Conversation history, allowlists and iLink credentials stay in place.
+When upgrading, retain `baseUrl`, `token`, and `wxid`; remove `clientId`. Cut over the server before installing this plugin. Conversation history, allowlists and iLink credentials stay in place.
 
 ## Chat commands
 

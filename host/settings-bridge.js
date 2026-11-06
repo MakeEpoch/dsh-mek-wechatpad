@@ -23,7 +23,7 @@ import { resolveConfig, resolveDefaults } from './config.js';
  * before switching to it.
  */
 const EDITABLE = new Set([
-  'enabled', 'provider', 'enabledProviders', 'baseUrl', 'token', 'wxid', 'clientId',
+  'enabled', 'provider', 'enabledProviders', 'baseUrl', 'token', 'wxid',
   'requestTimeoutSeconds', 'weixinAccountFile', 'weixinTyping', 'weixinReplyQuote', 'weixinBotType',
   'cwd', 'agentPreset', 'sessionTitlePrefix',
   'notificationProvider', 'notificationChatId', 'notifyTaskCompleted', 'notifyPermissionRequest',

@@ -1,8 +1,8 @@
 # WechatPad · 微信接入 dsh
 
-## 0.1.7 接入整理
+## 0.1.11 OneBot v12
 
-WechatPad 仅连接 wechatReal08，设置页只保留服务地址、访问 Token、机器人 wxid；客户端标识位于高级设置。固定通过 WS 接收，发送使用同一服务的 HTTP API。后台 Webhook 由服务端独立投递。
+WechatPad 通过 OneBot v12 连接服务端，设置页只保留服务地址、访问 Token、机器人 wxid。WS 接收与 HTTP 动作共用根路径 `/`；后台 Webhook 由服务端独立投递。完整能力与迁移说明见 [ONEBOT_V12.md](docs/ONEBOT_V12.md)。
 
 把微信接到 DeepSeek Harness：微信消息进入**真实 dsh 会话**（工具、审批、历史、子代理都与在网页里敲字完全一致），回复回到同一个聊天。配置全部在 dsh 设置面板里完成。
 
@@ -37,7 +37,7 @@ npm run install:dsh:web # 打包安装进 web profile（先 --dry-run 预览）
 
 然后重启 `dsh web` 并刷新页面，打开 **设置 → 微信**：
 
-1. 在 **WechatPad** 页启用连接，填写服务地址（如 `http://127.0.0.1:8062`）、访问 Token（服务端 `WECHAT_BRIDGE_TOKEN`）和已登录机器人的 wxid。
+1. 在 **WechatPad** 页启用连接，填写服务地址（如 `http://127.0.0.1:8062`）、访问 Token（服务端 `ONEBOT_ACCESS_TOKEN`）和已登录机器人的 wxid。
 2. 需要扫码机器人时，在 **微信机器人** 页独立启用，保存后生成二维码并用微信确认。两种连接可同时在线，配置不会互相覆盖。
 3. 保存后点各连接的 **检测连接**；重新连接只作用于当前连接。
 4. WechatWechatPad 的私聊默认 `仅白名单`，把允许的 wxid 填进 **私聊白名单**。扫码机器人不应用此白名单。
@@ -55,7 +55,7 @@ iLink 的扫码凭据存于本地 `wechatpad/weixin-accounts/credentials.json`�
 
 旧 profile 未声明 `enabledProviders` 时沿用原 `provider`，不会自动开启第二条连接；显式 `[]` 关闭两路。
 
-> 当前源码的自动测试中，WechatPad 发送语音返回值的两项断言未通过；相关发送结果需要进一步验证，不能仅凭这些测试确认送达。
+> 发送结果以 OneBot status/retcode 和真实回执为准；超时不自动重发。语音是否可用仍受底层服务能力约束。
 
 ## 图片、语音和文件
 
@@ -103,11 +103,11 @@ iLink 的回复凭证、去重信息及接收游标保存在账号目录下 `sta
 
 ## WechatPad 连接
 
-一个连接对应一个微信账号。插件订阅 `/ws/outbound`，发送使用 `/proxy/{wxid}/...`；两者使用同一个访问 Token。客户端标识默认 `dsh`，同一服务上各消费者应使用不同标识。
+一个连接对应一个微信账号。插件通过 OneBot v12 根路径 `/` 接收 WS 事件、POST 动作；使用 Bearer Token，并按 `self.user_id` 过滤账号。
 
 WS 为实时分发，断线期间不补发；后台 Webhook 独立持久化重试，插件不注册、接管或关闭服务端回调。
 
-从 0.1.6 升级时，需要一次性把原连接配置整理成 `baseUrl`、`token`、`wxid`、`clientId`；分别使用原服务地址、服务 Token、机器人 wxid 和客户端标识。删除旧的接入模式、Key、接口前缀、回调和 `bridge*` 字段。运行时不读取旧字段；聊天、白名单和 iLink 账号数据不需要迁移。
+升级到 OneBot v12 时，保留 `baseUrl`、`token`、`wxid`，删除 `clientId`；先完成服务端切换再更新插件。聊天、白名单和 iLink 账号数据不需要迁移。
 
 ## 微信里可用的命令
 
@@ -133,7 +133,6 @@ WS 为实时分发，断线期间不补发；后台 Webhook 独立持久化重�
 | `baseUrl` | `http://127.0.0.1:8062` | wechatReal08 服务地址 |
 | `token` | 空 | 服务访问 Token（密钥，不回显；留空保留） |
 | `wxid` | 空 | 一个已登录机器人的 wxid |
-| `clientId` | `dsh` | WS 客户端标识，高级设置 |
 | `cwd` | 空 | 新会话的通用工作目录；空时按聊天创建 `~/.dsh/wechat/<chatId>`，扫码聊天在 `~/.dsh/wechat/weixin/` 下 |
 | `agentPreset` | 空 | 新会话 Agent Preset |
 | `sessionTitlePrefix` | `微信` | 兼容旧配置；标题现按内容自动生成，此项不再使用 |

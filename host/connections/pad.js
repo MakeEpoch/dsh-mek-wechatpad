@@ -1,18 +1,15 @@
 /** WechatPad: one WS receive path and authenticated HTTP sends. */
 import { createRequire } from 'node:module';
-import { padAttachments, isPendingPadFile } from '../pad-media.js';
+import { isPendingPadFile } from '../pad-media.js';
 import { encodeVoice } from '../voice.js';
 
 import { buildPadWsUrl, unwrapPadFrame } from '../pad-feed.js';
 import { outboundTarget } from '../config.js';
-import { decodeMessage } from '../inbound.js';
+import { decodeOneBot } from '../onebot-message.js';
 import { OutboundSender } from '../outbound.js';
 import { WechatPadClient } from '../pad-api.js';
 import { PushTransport } from '../transport.js';
 import { DEFAULT_CAPABILITIES, unsupportedFeature } from './types.js';
-
-/** How long a server nickname lookup may take before the Pad starts anyway. */
-const NICKNAME_TIMEOUT_MS = 8_000;
 
 export class PadConnection {
   /** @type {'pad'} */
@@ -188,14 +185,6 @@ export class PadConnection {
     this.#sender = new OutboundSender({ client: this.#client, logger: this.#logger });
   }
 
-  /** The bot's own identity, used to recognise group mentions and self-echo. */
-  #identity() {
-    return {
-      selfWxid: this.#config.wxid,
-      selfNickname: this.#config.selfNickname,
-    };
-  }
-
   #newTransport() {
     const config = this.#config;
     if (!outboundTarget(config).configured) {
@@ -206,7 +195,7 @@ export class PadConnection {
       const url = buildPadWsUrl(config);
       return new PushTransport({
         url: config.baseUrl,
-        open: async () => openSocket(url),
+        open: async () => openSocket(url, config.token),
         onFrame: (raw) => this.#handlePadFrame(raw),
         logger: this.#logger,
         onState: (state, detail) => this.#emitTransportState(state, detail, 'WechatPad WS'),
@@ -238,7 +227,6 @@ export class PadConnection {
     // Do not admit the upload notification or consume its dedupe id. The
     // completed file arrives next with that same id and contains the CDN data.
     if (message.mediaPayload && isPendingPadFile(message.mediaPayload)) return;
-    if (message.mediaPayload) message.attachments = padAttachments(message.mediaPayload, this.#client);
     try {
       return this.#handlers?.onMessage?.(message);
     } catch (error) {
@@ -261,14 +249,9 @@ export class PadConnection {
     const base = this.#config.baseUrl;
     if (!base || !wxid) return;
     try {
-      const response = await fetch(`${base.replace(/\/+$/, '')}/bridge/accounts`, {
-        headers: { 'X-Bridge-Token': this.#config.token },
-        signal: AbortSignal.timeout(NICKNAME_TIMEOUT_MS),
-      });
+      const response = await this.#client.loginUserInfo();
       if (!response.ok) return;
-      const body = await response.json();
-      const row = (Array.isArray(body?.accounts) ? body.accounts : []).find((item) => item?.wxid === wxid);
-      const nickname = String(row?.nick_name ?? '').trim();
+      const nickname = String(response.data?.user_name ?? '').trim();
       if (nickname) {
         this.#config.selfNickname = nickname;
         this.#logger('info', `群聊 @ 检测使用机器人昵称「${nickname}」`);
@@ -289,7 +272,6 @@ export class PadConnection {
     const frame = unwrapPadFrame(payload);
     if (!frame) return;
     if ('control' in frame) {
-      if (frame.control === 'ping') this.#transport?.send('{"type":"pong"}');
       if (frame.control === 'error' || frame.control === 'warning') {
         this.#emitControl({ kind: frame.control, detail: String(frame.detail ?? '') });
       }
@@ -309,16 +291,16 @@ export class PadConnection {
 
   /** Decode one raw payload (WS payload) and hand it up. */
   #handleInbound(payload) {
-    const message = decodeMessage(payload, this.#identity());
+    const message = decodeOneBot(payload, this.#client);
     if (!message) return;
     return this.#emitMessage(message);
   }
 }
 
 /** Open one WebSocket with the `ws` package and resolve once it is up. */
-async function openSocket(url) {
+async function openSocket(url, token) {
   const { WebSocket } = createRequire(import.meta.url)('ws');
-  const socket = new WebSocket(url);
+  const socket = new WebSocket(url, { headers: { Authorization: `Bearer ${token}` } });
   await new Promise((resolve, reject) => {
     socket.once('open', resolve);
     socket.once('error', reject);

@@ -9,7 +9,7 @@ import {
 import { chalk } from '../host/outbound.js';
 import { DedupeWindow, parseFrame, reconnectDelay } from '../host/transport.js';
 import { extractAssistantText } from '../host/harness.js';
-import { WechatPadClient, extractMessageId, isRetryable, normalizeEnvelope } from '../host/pad-api.js';
+import { WechatPadClient } from '../host/pad-api.js';
 import {
   isEditableField, panelDefaults, panelReadModel, resolveSettingsEntry, savePanelSettings,
 } from '../host/settings-bridge.js';
@@ -30,7 +30,7 @@ function padMessage({ fromUser, toUser, content, msgType = 1, id = 'm1', atUsers
 test('config: defaults fill every field and lists accept comma or full-width separators', () => {
   const resolved = resolveConfig({});
   assert.equal(resolved.baseUrl, 'http://127.0.0.1:8062');
-  assert.equal(resolved.clientId, 'dsh');
+  assert.equal(resolved.clientId, undefined);
   assert.equal(resolved.dmPolicy, 'allowlist');
   assert.equal(resolved.groupPolicy, 'disabled');
   assert.deepEqual(resolved.allowedUsers, []);
@@ -184,83 +184,29 @@ test('transport: push frames split into message, batch, and status kinds', () =>
   assert.ok(reconnectDelay(20) <= 60_000);
 });
 
-test('pad api: envelopes from Pad and Bridge normalize to ok/error', () => {
-  assert.deepEqual(normalizeEnvelope({ Success: true, Code: 200, Data: { v: 1 } }), { ok: true, data: { v: 1 } });
-  assert.equal(normalizeEnvelope({ Success: false, Code: -2, Text: 'bad key' }).ok, false);
-  // A healthy account probe answers Code 200 with Success false; Code is the
-  // transport verdict, so this must read as success.
-  assert.deepEqual(normalizeEnvelope({ Code: 200, Success: false, Data: { loginState: 1 } }), { ok: true, data: { loginState: 1 } });
-  assert.equal(normalizeEnvelope({ ok: false, error: 'bridge down' }).error, 'bridge down');
-  assert.deepEqual(normalizeEnvelope({ ok: true, accounts: [] }), { ok: true, data: { accounts: [] } });
-  assert.equal(isRetryable('connection refused'), true);
-  assert.equal(isRetryable('unauthorized'), false);
-  assert.equal(extractMessageId({ chat_send_ret_list: [{ newMsgId: 42 }] }), '42');
-});
-
-test('pad api: requires service token and one wxid', () => {
-  const client = new WechatPadClient({ baseUrl: 'http://pad.test', token: 't', wxid: 'bot' });
-  assert.equal(client.url('/message/SendTextMessage'), 'http://pad.test/proxy/bot/message/SendTextMessage');
-  assert.equal(client.configured, true);
-  for (const options of [{ baseUrl: 'http://pad.test', token: 't' }, { baseUrl: 'http://pad.test', wxid: 'bot' }]) {
-    assert.equal(new WechatPadClient(options).configured, false);
-  }
-});
-
-test('pad api: requests authenticate with the service token and no account key', async t => {
-  const requests = [];
+test('OneBot HTTP: single endpoint, Bearer auth and correlated standard receipt', async t => {
+  const calls = [];
   t.mock.method(globalThis, 'fetch', async (url, options) => {
-    requests.push({ url: new URL(url), options });
-    return Response.json({ Code: 200, Data: { isSendSuccess: true, newMsgId: '123' } });
+    const body = JSON.parse(options.body); calls.push({ url: new URL(url), options, body });
+    return Response.json({ status: 'ok', retcode: 0, data: { message_id: '9007199254740993', time: 1 }, message: '', echo: body.echo });
   });
-  const target = outboundTarget(resolveConfig({ baseUrl: 'http://pad.test', token: 'secret', wxid: 'bot' }));
-  const client = new WechatPadClient(target);
-  assert.equal((await client.sendText('peer', 'hello')).messageId, '123');
-  assert.equal(requests[0].url.pathname, '/proxy/bot/message/SendTextMessage');
-  assert.equal(requests[0].url.search, '');
-  assert.equal(requests[0].options.headers['X-Bridge-Token'], 'secret');
+  const client = new WechatPadClient({ baseUrl: 'http://pad.test', token: 'secret', wxid: 'bot' });
+  const result = await client.sendText('room@chatroom', 'hello');
+  assert.equal(result.ok, true); assert.equal(result.messageId, '9007199254740993');
+  assert.equal(calls[0].url.pathname, '/'); assert.equal(calls[0].url.search, '');
+  assert.equal(calls[0].options.headers.Authorization, 'Bearer secret');
+  assert.deepEqual(calls[0].body.self, { platform: 'wechat', user_id: 'bot' });
+  assert.equal(calls[0].body.params.group_id, 'room@chatroom');
 });
 
-test('pad api: voice benign ret is endpoint-scoped and structured errors stay readable', () => {
-  const voice = { Code: 200, Success: false, Data: { base_response: { ret: -104, errMsg: { str: '' } } } };
-  assert.equal(normalizeEnvelope(voice, { endpoint: '/message/SendVoice' }).ok, true);
-  for (const endpoint of ['', '/message/SendTextMessage', '/message/SendImageNewMessage', '/message/SendAppMessage']) {
-    const result = normalizeEnvelope(voice, { endpoint });
-    assert.equal(result.ok, false);
-    assert.equal(result.error, 'ret=-104');
-  }
-  for (const data of [
-    { base_response: { ret: -1, errMsg: { str: '账号已退出' } } },
-    { isSendSuccess: false, base_response: { ret: -104 } },
-    [{ ret: -104 }, { retCode: -2, errMsg: { str: '拒绝发送' } }],
-  ]) {
-    const result = normalizeEnvelope({ Code: 200, Data: data }, { endpoint: '/message/SendVoice' });
-    assert.equal(result.ok, false);
-    assert.doesNotMatch(result.error, /\[object Object\]/);
-  }
-  assert.equal(normalizeEnvelope({ ...voice, Code: 500 }, { endpoint: '/message/SendVoice' }).ok, false);
-  assert.equal(normalizeEnvelope({ Code: 200, Data: { ret: { value: 0 } } }).ok, true);
-  assert.equal(normalizeEnvelope({ Code: 500, Message: { str: '上游拒绝' } }).error, 'Code=500: 上游拒绝');
-});
-
-test('pad api: nested send rejection overrides an outer success envelope', async (t) => {
-  const failures = [
-    { isSendSuccess: false, errMsg: 'send rejected' },
-    { base_response: { ret: -1, errMsg: 'bad recipient' } },
-    { chat_send_ret_list: [{ ret: '-2' }] },
-    { isSendSuccess: true, chat_send_ret_list: [{ ret: 7 }] },
-    [{ ret: 0 }, { isSendSuccess: false }],
-  ];
-  for (const data of failures) {
-    assert.equal(normalizeEnvelope({ Code: 200, Success: true, Data: data }).ok, false);
-  }
-  assert.equal(normalizeEnvelope({ Code: 200, Success: false, Data: { isSendSuccess: true, base_response: { ret: '0' } } }).ok, true);
-  t.mock.method(globalThis, 'fetch', async () => Response.json({
-    Code: 200, Success: true, Data: { isSendSuccess: false, errMsg: 'bad recipient' },
-  }));
-  const sender = new (await import('../host/outbound.js')).OutboundSender({
-    client: new WechatPadClient({ baseUrl: 'http://bridge.test', token: 't', wxid: 'wxid_bot' }),
+test('OneBot failed action is authoritative and an uncertain send is not retried', async t => {
+  let calls = 0;
+  t.mock.method(globalThis, 'fetch', async (_, options) => {
+    calls += 1; return Response.json({ status: 'failed', retcode: 34000, data: null, message: 'bad recipient', echo: JSON.parse(options.body).echo,
+      'wechat.source': { provider: 'fixture', data: { ret: 0 } } });
   });
-  assert.deepEqual(await sender.sendReply('wxid_peer', 'hello'), { ok: false, delivered: 0, error: 'bad recipient' });
+  const result = await new WechatPadClient({ baseUrl: 'http://pad.test', token: 't', wxid: 'bot' }).sendText('peer', 'hello');
+  assert.equal(result.ok, false); assert.equal(result.error, 'bad recipient'); assert.equal(calls, 1);
 });
 
 test('harness: reply text comes from text parts only, never reasoning', () => {
@@ -341,8 +287,8 @@ test('config: a volatile parsed Config reads back as plain runtime values', () =
   assert.equal(resolved.token, 'secret-key');
   assert.equal(resolved.dmPolicy, 'open');
   assert.equal(resolved.webhookPath, undefined);
-  assert.equal(resolved.clientId, 'dsh');
-  assert.equal(typeof resolved.clientId, 'string');
+  assert.equal(resolved.clientId, undefined);
+  assert.equal(typeof resolved.wxid, 'string');
   // A plain object (hand-written patch, defaults) keeps working unchanged.
   assert.equal(resolveConfig({ baseUrl: 'http://x', token: 'k' }).baseUrl, 'http://x');
 });
@@ -487,7 +433,7 @@ test('config: provider defaults to pad so every existing profile keeps working',
   // Existing pad fields and their defaults are untouched.
   const resolved = resolveConfig({});
   assert.equal(resolved.baseUrl, 'http://127.0.0.1:8062');
-  assert.equal(resolved.clientId, 'dsh');
+  assert.equal(resolved.clientId, undefined);
   assert.equal(resolved.webhookPath, undefined);
   assert.equal(resolved.requestTimeoutSeconds, 20);
 });
@@ -565,7 +511,7 @@ test('settings: the panel defaults endpoint carries every field the page renders
   // an untouched control (the protocol select, the iLink switches) shows the
   // schema default instead of a blank box.
   const defaults = panelDefaults();
-  for (const name of ['provider', 'weixinTyping', 'weixinReplyQuote', 'weixinBotType', 'requestTimeoutSeconds', 'clientId', 'wxid']) {
+  for (const name of ['provider', 'weixinTyping', 'weixinReplyQuote', 'weixinBotType', 'requestTimeoutSeconds', 'wxid']) {
     assert.ok(name in defaults, `${name} must be in the panel defaults`);
   }
   assert.equal(defaults.provider, 'pad');

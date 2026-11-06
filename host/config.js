@@ -58,12 +58,9 @@ export const Config = z.object({
     .description('WechatPad 服务地址，例如 http://127.0.0.1:8062。')
     .role('volatile').extra('volatile', true),
   token: z.string().role('secret').extra('volatile', true)
-    .description('服务端访问 Token（WECHAT_BRIDGE_TOKEN），只写不读。'),
+    .description('服务端访问 Token（ONEBOT_ACCESS_TOKEN），只写不读。'),
   wxid: z.string().default('')
     .description('已登录机器人的 wxid；一个连接对应一个微信账号。')
-    .role('volatile').extra('volatile', true),
-  clientId: z.string().default('dsh')
-    .description('WS 客户端标识；同一服务的每个消费者使用不同值。')
     .role('volatile').extra('volatile', true),
   requestTimeoutSeconds: z
     .number()
@@ -264,7 +261,6 @@ export function resolveConfig(raw) {
     baseUrl: trimmedBase || 'http://127.0.0.1:8062',
     token: String(field('token') ?? '').trim(),
     wxid: String(field('wxid') ?? '').trim(),
-    clientId: String(field('clientId') ?? '').trim() || 'dsh',
     requestTimeoutSeconds: clampNumber(field('requestTimeoutSeconds'), 5, 120, 20),
     // iLink bot: a directory hint only (empty = the Host picks the default
     // under ~/.dsh), two behaviour switches read optimistically as `!== false`,

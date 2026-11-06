@@ -2,7 +2,7 @@
 
 ## 参考实现
 
-- WechatPad：本机原项目 `hermes-plugin-wechatpad/wechatpad/inbound.py`、`outbound.py`、`audio.py`，以及 WechatPad Swagger。沿用 GetMsgBigImg 分块、GetMsgVoice、SendImageNewMessage 和 SendVoice 形状；文件按当前部署 Swagger 与本地 wehub_util.py 的 UploadAppAttach → SendAppMessage 流程发送；API 固定使用 `/proxy/{wxid}` 和服务 Token。
+- WechatPad：本机原项目 `hermes-plugin-wechatpad/wechatpad/inbound.py`、`outbound.py`、`audio.py`，以及 WechatPad Swagger。沿用 GetMsgBigImg 分块、GetMsgVoice、SendImageNewMessage 和 SendVoice 形状；文件按当前部署 Swagger 与本地 wehub_util.py 的 UploadAppAttach → SendAppMessage 流程发送；原生协议转换由服务端 Provider 完成；插件通过 OneBot v12 的 send_message、upload_file、get_file 收发，不再调用原生 URL。
 - 扫码：安装的 `@xmanrui/dsh-im@5.1.0` 的 `src/channels/weixin/weixin-api.mjs`、`weixin-bridge.mjs`。沿用 iLink AES-128-ECB CDN 上传下载及图片／文件消息。
 - 文件回传：改编 dsh-im `src/channels/shared/semantic/artifact.mjs` 的工具快照和按请求／轮次归属的投递登记，保留 [MIT 许可](../host/vendor/DSH-IM-LICENSE)。使用插件专属工具名和登记表，避免与原 IM 插件串用。
 - SILK：[silk-wasm 官方实现](https://github.com/idranme/silk-wasm)，运行时依赖固定在 lockfile。识别 WAV 使用 16 kHz、单声道、16 位；发送 SILK 使用 24 kHz。

@@ -12,25 +12,19 @@
 | `settings.dm_policy` 等 PascalCase 环境变量 | Config 字段（camelCase），网页设置面板编辑 |
 | `WECHATPAD_KEY`（环境变量，明文） | 只写不读的 `token` 字段；服务端按 wxid 使用账号密钥 |
 | `config.py` + `deps.py` 动态导入 aiohttp/httpx/pilk | 使用 dsh 运行时的 `fetch`、`node:http`、`ws`，二维码依赖 qrcode，SILK 依赖 silk-wasm |
-| `transport.py` WebSocket/webhook/bridge 三选一 | 固定订阅 wechatReal08 的 `/ws/outbound`，不注册 HTTP 回调 |
-| `inbound.py` 解析 + 媒体下载 | `inbound.js` 解析 + `pad-media.js` 惰性下载 + `media.js` 会话附件 |
+| `transport.py` WebSocket/webhook/bridge 三选一 | 固定使用 OneBot v12 根路径 `/`，不注册 HTTP 回调 |
+| `inbound.py` 解析 + 媒体下载 | `onebot-message.js` 标准消息段解析 + `get_file` 惰性下载 + `media.js` 会话附件 |
 | `outbound.py` 分段发送 + 发送节流 | `outbound.js`：按会话队列串行 + 1.1s 秒级间隔 |
 | `ref_index.py` 引用/批次/去重索引 | `transport.js` 的 `DedupeWindow`；引用索引未实现 |
 | `audio.py` silk 语音 | `voice.js`：SILK 编解码、WAV 归一化、dsh 本地转写 |
 
-## 关键端点
+## 当前协议
 
-| 用途 | WechatPad 端点 | 本项目调用处 |
-| --- | --- | --- |
-| 推送 | `GET /ws/outbound`（token/client_id/wxids） | `host/pad-feed.js` + `host/transport.js` |
-| 发文本 | `POST /message/SendTextMessage` | `host/pad-api.js` → `sendText` |
-| 发图片 | `POST /message/SendImageNewMessage` | `host/pad-api.js` → `sendImage` |
-| 在线状态 | `GET /login/GetLoginStatus` | 设置页「测试连接」 |
-| 账号 API | `{base}/proxy/{wxid}/...` | `baseUrl` + `token` + `wxid` |
+Pad 连接统一使用 OneBot v12，详见 [ONEBOT_V12.md](ONEBOT_V12.md)。HTTP 动作和 WS 事件使用根路径 `/` 与 Bearer Token；机器人由 self 标识。客户端不携带 client_id，文件通过 file_id 惰性获取。原生参数转换与登录状态在服务端 Provider 内完成。
 
 ## 有意保留的行为
 
-- 一个连接对应一个机器人 wxid；客户端标识默认 `dsh`。
+- 一个连接对应一个机器人 wxid，按标准 self 标识过滤。
 - 发送必须秒级间隔：WechatPad 用会话级 `clientMsgId`，同秒会去重。
 - 群消息正文前缀 `wxid:\n`，需要拆出发言者。
 - 自己发的消息会作为普通消息回到推送里，需要 self-echo 过滤。

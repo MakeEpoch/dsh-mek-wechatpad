@@ -336,38 +336,17 @@ test('push transport reports connection state so the panel is not stuck on idle'
   transport.stop();
 });
 
-test('bridge subscription: URL carries token, client_id, and the subscribed wxids', () => {
-  const url = new URL(buildPadWsUrl({
-    baseUrl: 'http://127.0.0.1:8002/',
-    token: 'tok-123',
-    wxid: 'user_example',
-    clientId: 'dsh',
-  }));
+test('OneBot feed uses root URL without credentials or subscriptions', () => {
+  const url = new URL(buildPadWsUrl({ baseUrl: 'http://127.0.0.1:8002/' }));
   assert.equal(url.protocol, 'ws:');
-  assert.equal(url.pathname, '/ws/outbound');
-  assert.equal(url.searchParams.get('token'), 'tok-123');
-  assert.equal(url.searchParams.get('client_id'), 'dsh');
-  assert.equal(url.searchParams.get('wxids'), 'user_example');
-
-  const secure = new URL(buildPadWsUrl({ baseUrl: 'https://bridge.example', token: 't', wxid: 'a' }));
-  assert.equal(secure.protocol, 'wss:');
-
-  assert.throws(() => buildPadWsUrl({ baseUrl: 'http://x', token: 't', wxid: '' }), /wxid/);
-  assert.throws(() => buildPadWsUrl({ baseUrl: 'http://x', token: '', wxid: 'a' }), /Token/);
+  assert.equal(url.pathname, '/');
+  assert.equal(url.search, '');
+  assert.equal(new URL(buildPadWsUrl({baseUrl: 'https://example.com'})).protocol, 'wss:');
 });
-
-test('bridge subscription: the frame envelope unwraps to a plain Pad payload', () => {
-  const message = { from_user_name: { str: 'user_example' }, msg_type: 1, content: { str: '你好' }, new_msg_id: 'm1' };
-  assert.deepEqual(unwrapPadFrame({ type: 'message', wxid: 'user_example', message }), { wxid: 'user_example', message });
-  assert.deepEqual(unwrapPadFrame({ type: 'ping' }), { control: 'ping' });
-  assert.deepEqual(unwrapPadFrame({ type: 'pong' }), { control: 'pong' });
-  assert.deepEqual(unwrapPadFrame({ type: 'error', message: 'bad token' }), { control: 'error', detail: 'bad token' });
-  // A bare payload without the Bridge envelope still decodes.
-  assert.equal(unwrapPadFrame(message), null);
+test('OneBot feed accepts standard messages and meta events', () => {
+  const message = { type: 'message', self: { platform: 'wechat', user_id: 'bot' }, message: [{type: 'text', data: {text: '你好'}}] };
+  assert.deepEqual(unwrapPadFrame(message), {wxid: 'bot', message});
+  assert.deepEqual(unwrapPadFrame({type: 'meta', detail_type: 'heartbeat'}), {control: 'heartbeat'});
+  assert.equal(unwrapPadFrame({type: 'message', wxid: 'bot', message: {}}), null);
   assert.equal(unwrapPadFrame(null), null);
-
-  // End to end: an unwrapped frame decodes like a direct Pad push.
-  const decoded = decodeMessage(message);
-  assert.equal(decoded.senderId, 'user_example');
-  assert.equal(decoded.text, '你好');
 });

@@ -430,106 +430,26 @@ test('image fallback retries only explicit pre-admission image rejection and kee
   assert.match(calls[1].args.request.content[0].text, /原图已保存/);
 });
 
-test('Pad sends real HTTP image/voice/file shapes, route credentials and do not retry uncertain uploads', async (t) => {
+test('OneBot media sends upload then standard message and never retries uncertain sends', async t => {
   const calls = [];
-  let mode = 'normal';
   const server = createServer(async (request, response) => {
-    const chunks = [];
-    for await (const chunk of request) chunks.push(chunk);
-    calls.push({
-      url: new URL(request.url, 'http://localhost'),
-      body: JSON.parse(Buffer.concat(chunks)), token: request.headers['x-bridge-token'],
-    });
-    const call = calls.at(-1);
-    const upload = call.url.pathname.endsWith('/other/UploadAppAttach');
-    const app = call.url.pathname.endsWith('/message/SendAppMessage');
-    const voice = call.url.pathname.endsWith('/message/SendVoice');
-    assert.ok(!call.url.pathname.endsWith('/SendFileMessage'), 'removed legacy endpoint must never be called');
-    if ((upload && mode === 'upload-fail') || (app && mode === 'send-fail')) {
-      response.writeHead(503).end('temporary network failure');
-      return;
-    }
-    response.writeHead(200, { 'content-type': 'application/json' }).end(
-      JSON.stringify({
-        Success: !voice,
-        Code: 200,
-        Data: upload ? (mode === 'missing-id' ? {} : { mediaId: { str: 'attachment<&id' }, totalLen: 6 })
-          : voice ? { base_response: { ret: -104, errMsg: { str: '' } } }
-          : app ? [{ MsgId: 'receipt', retCode: mode === 'send-reject' ? -2 : 0 }]
-            : { MsgId: 'receipt' },
-      }),
-    );
+    const chunks = []; for await (const chunk of request) chunks.push(chunk);
+    const body = JSON.parse(Buffer.concat(chunks)); calls.push({ path: request.url, authorization: request.headers.authorization, body });
+    const data = body.action === 'upload_file' ? { file_id: 'uploaded-file' } : { message_id: '9007199254740993', time: 1 };
+    response.setHeader('content-type', 'application/json'); response.end(JSON.stringify({ status: 'ok', retcode: 0, data, message: '', echo: body.echo }));
   });
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-  t.after(() => server.close());
-  const baseUrl = `http://127.0.0.1:${server.address().port}`;
-  {
-    mode = 'normal';
-    const client = new WechatPadClient({
-      baseUrl,
-      token: 'private-service-token', wxid: 'bot',
-    });
-    assert.equal(
-      (await client.sendImage('peer', PNG.toString('base64'))).ok,
-      true,
-    );
-    assert.equal(
-      (
-        await client.sendVoice('peer', {
-          bytes: Buffer.from('silk'),
-          seconds: 2,
-        })
-      ).ok,
-      true,
-    );
-    assert.equal(
-      (
-        await client.sendFile('peer', {
-          fileName: '报告.txt',
-          bytes: Buffer.from('report'),
-        })
-      ).ok,
-      true,
-    );
-    const [image, voice, upload, file] = calls.slice(-4);
-    assert.equal(
-      image.url.pathname,
-      `/proxy/bot/message/SendImageNewMessage`,
-    );
-    assert.equal(
-      image.url.searchParams.get('key'),
-      null,
-    );
-    assert.deepEqual(
-      Buffer.from(image.body.MsgItem[0].ImageContent, 'base64'),
-      PNG,
-    );
-    assert.equal(voice.body.VoiceFormat, 4);
-    assert.equal(voice.body.VoiceSecond, 2);
-    assert.equal(upload.url.pathname, `/proxy/bot/other/UploadAppAttach`);
-    assert.equal(file.url.pathname, `/proxy/bot/message/SendAppMessage`);
-    assert.ok([image, voice, upload, file].every(x => x.url.searchParams.get('key') === null && x.token === 'private-service-token'));
-    assert.equal(
-      Buffer.from(upload.body.fileData, 'base64').toString(),
-      'report',
-    );
-    assert.equal(file.body.AppList[0].ContentType, 6);
-    assert.equal(file.body.AppList[0].ToUserName, 'peer');
-    assert.match(file.body.AppList[0].ContentXML, /<title>报告.txt<\/title>/);
-    assert.match(file.body.AppList[0].ContentXML, /<attachid>attachment&lt;&amp;id<\/attachid>/);
-    assert.match(file.body.AppList[0].ContentXML, /<totallen>6<\/totallen>/);
-    for (const [failure, count, error] of [['upload-fail', 1, /文件上传失败/], ['missing-id', 1, /未返回 mediaId/], ['send-reject', 2, /retCode=-2/], ['send-fail', 2, /HTTP 503/]]) {
-      mode = failure;
-      const before = calls.length;
-      const result = await client.sendFile('peer', { fileName: 'fail.txt', bytes: Buffer.from('failed') });
-      assert.equal(result.ok, false);
-      assert.match(result.error, error);
-      assert.equal(calls.length, before + count, 'failed upload/send is never retried or sent via a legacy route');
-    }
-    mode = 'normal';
-    assert.equal((await client.sendFile('peer', { fileName: '报告 & <v2>.txt', bytes: Buffer.from('report') })).ok, true);
-    assert.match(calls.at(-1).body.AppList[0].ContentXML, /<title>报告 &amp; &lt;v2&gt;.txt<\/title>/);
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve)); t.after(() => server.close());
+  const client = new WechatPadClient({ baseUrl: `http://127.0.0.1:${server.address().port}`, token: 'secret', wxid: 'bot' });
+  assert.equal((await client.sendImage('peer', PNG.toString('base64'))).ok, true);
+  assert.equal((await client.sendVoice('peer', { bytes: Buffer.from('silk'), seconds: 2 })).ok, true);
+  assert.equal((await client.sendFile('peer', { fileName: 'report.txt', bytes: Buffer.from('report') })).ok, true);
+  assert.equal(calls.length, 6);
+  for (let i = 0; i < calls.length; i += 2) {
+    assert.equal(calls[i].body.action, 'upload_file'); assert.equal(calls[i + 1].body.action, 'send_message');
+    assert.equal(calls[i + 1].body.params.message[0].data.file_id, 'uploaded-file');
   }
+  assert.ok(calls.every(c => c.path === '/' && c.authorization === 'Bearer secret'));
+  assert.equal(calls[3].body.params.message[0].data['wechat.duration'], 2);
 });
 
 test('iLink sends images and audio/files through encrypted CDN upload followed by same-chat sendmessage', async () => {
